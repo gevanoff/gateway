@@ -1,0 +1,102 @@
+############################
+# Python / FastAPI
+############################
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+############################
+# Virtual environments
+############################
+.env/
+venv/
+env/
+.venv/
+var/
+*/env/
+*/venv/
+
+############################
+# Environment / secrets
+############################
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.crt
+*.token
+*.secrets
+
+############################
+# Gateway runtime data
+############################
+data/
+*.sqlite
+*.sqlite3
+*.db
+*.wal
+*.shm
+
+############################
+# Logs
+############################
+logs/
+*.log
+
+############################
+# Model / cache artifacts
+############################
+cache/
+models/
+hf_cache/
+huggingface/
+.HF_HOME/
+.XDG_CACHE_HOME/
+
+############################
+# Ollama / MLX artifacts
+############################
+ollama/
+mlx/
+*.gguf
+*.safetensors
+*.bin
+
+############################
+# OS / editor noise
+############################
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+
+############################
+# launchd / macOS
+############################
+*.plist
+!.example.plist
+
+############################
+# Misc
+############################
+tmp/
+scratch/
+notes/
+
+# macOS system directories (never commit)
+Library/
+*/Library/
+
