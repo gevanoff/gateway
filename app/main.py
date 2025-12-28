@@ -6,6 +6,8 @@ import logging
 import sys
 import secrets
 from typing import Any, Dict, List, Optional, Literal, AsyncIterator
+from urllib.parse import urlparse
+import base64
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request, Depends
@@ -19,6 +21,9 @@ import math
 import hashlib
 from array import array
 
+from app.router import RouterConfig, decide_route
+from app import memory_v2
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file="/var/lib/gateway/app/.env", extra="ignore")
 
@@ -30,13 +35,31 @@ class Settings(BaseSettings):
     GATEWAY_BEARER_TOKEN: str
 
     DEFAULT_BACKEND: Literal["ollama", "mlx"] = "ollama"
+    # Backends can each have "strong" and "fast" model choices.
+    # Defaults bias toward correctness for tools and general chat.
+    OLLAMA_MODEL_STRONG: str = "qwen2.5:32b"
+    OLLAMA_MODEL_FAST: str = "qwen2.5:7b"
+    MLX_MODEL_STRONG: str = "mlx-community/gemma-2-2b-it-8bit"
+    MLX_MODEL_FAST: str = "mlx-community/gemma-2-2b-it-8bit"
+
+    # Legacy aliases kept for backward compatibility
     OLLAMA_MODEL_DEFAULT: str = "qwen2.5:32b"
     MLX_MODEL_DEFAULT: str = "mlx-community/gemma-2-2b-it-8bit"
 
+    ROUTER_LONG_CONTEXT_CHARS: int = 40_000
+
     TOOLS_ALLOW_SHELL: bool = False
     TOOLS_ALLOW_FS: bool = False
+    TOOLS_ALLOW_HTTP_FETCH: bool = False
+    # Optional explicit allowlist; if set, only these tools may be executed.
+    # Example: "read_file,write_file,http_fetch"
+    TOOLS_ALLOWLIST: str = ""
     TOOLS_SHELL_CWD: str = "/var/lib/gateway/tools"
     TOOLS_SHELL_TIMEOUT_SEC: int = 20
+
+    TOOLS_HTTP_ALLOWED_HOSTS: str = "127.0.0.1,localhost"
+    TOOLS_HTTP_TIMEOUT_SEC: int = 10
+    TOOLS_HTTP_MAX_BYTES: int = 200_000
 
     EMBEDDINGS_BACKEND: Literal["ollama", "mlx"] = "ollama"
     EMBEDDINGS_MODEL: str = "nomic-embed-text"
@@ -46,6 +69,10 @@ class Settings(BaseSettings):
     MEMORY_TOP_K: int = 6
     MEMORY_MIN_SIM: float = 0.25
     MEMORY_MAX_CHARS: int = 6000
+
+    MEMORY_V2_ENABLED: bool = True
+    MEMORY_V2_MAX_AGE_SEC: int = 60 * 60 * 24 * 30  # 30 days
+    MEMORY_V2_TYPES_DEFAULT: str = "fact,preference,project"
 
 
 
@@ -129,6 +156,9 @@ def cosine(a: list[float], b: list[float]) -> float:
 
 memory_init()
 
+if S.MEMORY_V2_ENABLED:
+    memory_v2.init(S.MEMORY_DB_PATH)
+
 # ---------------------------
 # Auth
 # ---------------------------
@@ -175,6 +205,34 @@ class ChatCompletionRequest(BaseModel):
 class EmbeddingsRequest(BaseModel):
     model: str
     input: Any  # str | list[str]
+
+
+class MemoryUpsertRequest(BaseModel):
+    type: Literal["fact", "preference", "project", "ephemeral"]
+    text: str
+    source: Optional[Literal["user", "system", "tool"]] = "user"
+    meta: Optional[Dict[str, Any]] = None
+    id: Optional[str] = None
+    ts: Optional[int] = None
+
+
+class MemorySearchRequest(BaseModel):
+    query: str
+    types: Optional[List[Literal["fact", "preference", "project", "ephemeral"]]] = None
+    sources: Optional[List[Literal["user", "system", "tool"]]] = None
+    top_k: Optional[int] = None
+    min_sim: Optional[float] = None
+    max_age_sec: Optional[int] = None
+    include_compacted: bool = False
+
+
+class MemoryCompactRequest(BaseModel):
+    types: Optional[List[Literal["fact", "preference", "project", "ephemeral"]]] = None
+    max_age_sec: Optional[int] = None
+    max_items: int = 50
+    target_type: Literal["fact", "preference", "project", "ephemeral"] = "project"
+    target_source: Literal["user", "system", "tool"] = "system"
+    include_compacted: bool = False
 
 class CompletionRequest(BaseModel):
     model: str
@@ -274,10 +332,145 @@ def tool_write_file(args: Dict[str, Any]) -> Dict[str, Any]:
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
 
+def _allowed_tool_names() -> set[str]:
+    raw = (S.TOOLS_ALLOWLIST or "").strip()
+    if raw:
+        return {p.strip() for p in raw.split(",") if p.strip()}
+
+    allowed: set[str] = set()
+    if S.TOOLS_ALLOW_SHELL:
+        allowed.add("shell")
+    if S.TOOLS_ALLOW_FS:
+        allowed.update({"read_file", "write_file"})
+    if S.TOOLS_ALLOW_HTTP_FETCH:
+        allowed.add("http_fetch")
+    return allowed
+
+
+def _is_tool_allowed(name: str) -> bool:
+    return name in _allowed_tool_names()
+
+
+def tool_http_fetch(args: Dict[str, Any]) -> Dict[str, Any]:
+    if not S.TOOLS_ALLOW_HTTP_FETCH:
+        return {"ok": False, "error": "http_fetch tool disabled"}
+
+    url = args.get("url")
+    if not isinstance(url, str) or not url.strip():
+        return {"ok": False, "error": "url must be a non-empty string"}
+
+    method = (args.get("method") or "GET").strip().upper()
+    if method != "GET":
+        return {"ok": False, "error": "only GET is supported"}
+
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"}:
+        return {"ok": False, "error": "only http/https URLs are allowed"}
+
+    host = (parsed.hostname or "").strip().lower()
+    if not host:
+        return {"ok": False, "error": "url must include a hostname"}
+
+    allowed_hosts = {h.strip().lower() for h in (S.TOOLS_HTTP_ALLOWED_HOSTS or "").split(",") if h.strip()}
+    if host not in allowed_hosts:
+        return {"ok": False, "error": f"host not allowed: {host}"}
+
+    hdrs = args.get("headers")
+    if hdrs is None:
+        headers = {}
+    elif isinstance(hdrs, dict) and all(isinstance(k, str) and isinstance(v, str) for k, v in hdrs.items()):
+        headers = hdrs
+    else:
+        return {"ok": False, "error": "headers must be an object of string:string"}
+
+    max_bytes = int(S.TOOLS_HTTP_MAX_BYTES)
+    timeout = float(S.TOOLS_HTTP_TIMEOUT_SEC)
+
+    try:
+        with httpx.Client(timeout=timeout) as client:
+            with client.stream("GET", url, headers=headers) as r:
+                status = r.status_code
+                out = bytearray()
+                for chunk in r.iter_bytes():
+                    if not chunk:
+                        continue
+                    remaining = max_bytes - len(out)
+                    if remaining <= 0:
+                        break
+                    out.extend(chunk[:remaining])
+                content_type = r.headers.get("content-type", "")
+
+        body_text = None
+        try:
+            body_text = out.decode("utf-8")
+        except Exception:
+            body_text = None
+
+        return {
+            "ok": True,
+            "status": status,
+            "content_type": content_type,
+            "truncated": len(out) >= max_bytes,
+            "body_text": body_text,
+            "body_base64": None if body_text is not None else base64.b64encode(bytes(out)).decode("ascii"),
+        }
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+
 TOOL_IMPL = {
     "shell": tool_shell,
     "read_file": tool_read_file,
     "write_file": tool_write_file,
+    "http_fetch": tool_http_fetch,
+}
+
+
+TOOL_SCHEMAS: Dict[str, Dict[str, Any]] = {
+    "shell": {
+        "name": "shell",
+        "description": "Run a command locally (no shell=True).",
+        "parameters": {
+            "type": "object",
+            "properties": {"cmd": {"type": "string", "description": "Command string to execute."}},
+            "required": ["cmd"],
+            "additionalProperties": False,
+        },
+    },
+    "read_file": {
+        "name": "read_file",
+        "description": "Read a local text file.",
+        "parameters": {
+            "type": "object",
+            "properties": {"path": {"type": "string"}},
+            "required": ["path"],
+            "additionalProperties": False,
+        },
+    },
+    "write_file": {
+        "name": "write_file",
+        "description": "Write a local text file.",
+        "parameters": {
+            "type": "object",
+            "properties": {"path": {"type": "string"}, "content": {"type": "string"}},
+            "required": ["path", "content"],
+            "additionalProperties": False,
+        },
+    },
+    "http_fetch": {
+        "name": "http_fetch",
+        "description": "Fetch a URL via GET with host allowlist and size limits.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string"},
+                "method": {"type": "string", "enum": ["GET"]},
+                "headers": {"type": "object", "additionalProperties": {"type": "string"}},
+            },
+            "required": ["url"],
+            "additionalProperties": False,
+        },
+    },
 }
 
 
@@ -285,11 +478,44 @@ def run_tool_call(name: str, arguments_json: str) -> Dict[str, Any]:
     fn = TOOL_IMPL.get(name)
     if not fn:
         return {"ok": False, "error": f"unknown tool: {name}"}
+    if not _is_tool_allowed(name):
+        return {"ok": False, "error": f"tool not allowed: {name}"}
     try:
         args = json.loads(arguments_json) if arguments_json else {}
     except Exception:
         return {"ok": False, "error": "tool arguments must be valid JSON"}
     return fn(args)
+
+
+class ToolExecRequest(BaseModel):
+    arguments: Dict[str, Any] = {}
+
+
+@app.get("/v1/tools")
+async def v1_tools_list(req: Request):
+    require_bearer(req)
+    allowed = sorted(_allowed_tool_names())
+    data = []
+    for name in allowed:
+        sch = TOOL_SCHEMAS.get(name)
+        if sch:
+            data.append({"name": sch["name"], "description": sch["description"], "parameters": sch["parameters"]})
+        else:
+            data.append({"name": name, "description": "(no schema)", "parameters": {"type": "object"}})
+    return {"object": "list", "data": data}
+
+
+@app.post("/v1/tools/{name}")
+async def v1_tools_exec(req: Request, name: str):
+    require_bearer(req)
+    if name not in TOOL_IMPL:
+        raise HTTPException(status_code=404, detail=f"unknown tool: {name}")
+    if not _is_tool_allowed(name):
+        raise HTTPException(status_code=403, detail=f"tool not allowed: {name}")
+    body = await req.json()
+    tr = ToolExecRequest(**body)
+    # Execute synchronously; tool implementations enforce their own safety toggles.
+    return TOOL_IMPL[name](tr.arguments)
 
 
 # ---------------------------
@@ -337,6 +563,17 @@ def normalize_model(model: str, backend: str) -> str:
     if m in {"default", "mlx", ""}:
         return S.MLX_MODEL_DEFAULT
     return m
+
+
+def _router_cfg() -> RouterConfig:
+    return RouterConfig(
+        default_backend=S.DEFAULT_BACKEND,
+        ollama_strong_model=S.OLLAMA_MODEL_STRONG,
+        ollama_fast_model=S.OLLAMA_MODEL_FAST,
+        mlx_strong_model=S.MLX_MODEL_STRONG,
+        mlx_fast_model=S.MLX_MODEL_FAST,
+        long_context_chars_threshold=S.ROUTER_LONG_CONTEXT_CHARS,
+    )
 
 def approx_text_size(messages: List[ChatMessage]) -> int:
     # crude but effective; counts characters of user+system+assistant content
@@ -555,6 +792,22 @@ async def embed_text_for_memory(text: str) -> list[float]:
         return (await embed_ollama([text], model))[0]
     return (await embed_mlx([text], model))[0]
 
+
+async def embed_text_for_memory_v2(text: str) -> list[float]:
+    return await embed_text_for_memory(text)
+
+
+def _memory_v2_default_types() -> list[memory_v2.MemoryType]:
+    raw = (S.MEMORY_V2_TYPES_DEFAULT or "").strip()
+    if not raw:
+        return ["fact", "preference", "project"]
+    parts = [p.strip().lower() for p in raw.split(",") if p.strip()]
+    out: list[memory_v2.MemoryType] = []
+    for p in parts:
+        if p in {"fact", "preference", "project", "ephemeral"}:
+            out.append(p)  # type: ignore[arg-type]
+    return out or ["fact", "preference", "project"]
+
 async def memory_upsert(text: str, meta: dict | None = None, mid: str | None = None) -> dict:
     meta = meta or {}
     if mid is None:
@@ -743,27 +996,295 @@ async def inject_memory(messages: List[ChatMessage]) -> List[ChatMessage]:
     if not isinstance(last_user, str) or not last_user.strip():
         return messages
 
-    res = await memory_search(last_user, S.MEMORY_TOP_K, S.MEMORY_MIN_SIM)
-    if not res.get("ok") or not res.get("results"):
-        return messages
-
     chunks = []
     total = 0
-    for r in res["results"]:
-        t = r.get("text") or ""
-        if not isinstance(t, str):
-            continue
-        line = f"- ({r.get('score'):.3f}) {t}"
-        if total + len(line) > S.MEMORY_MAX_CHARS:
-            break
-        chunks.append(line)
-        total += len(line)
+
+    if S.MEMORY_V2_ENABLED:
+        # v2 async retrieval
+        qemb = await embed_text_for_memory_v2(last_user)
+        now = int(time.time())
+        types = _memory_v2_default_types()
+        max_age = S.MEMORY_V2_MAX_AGE_SEC
+        # manually search using v2 module but with already-computed query embedding
+        # (avoid embedding twice)
+        conn = sqlite3.connect(S.MEMORY_DB_PATH)
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA synchronous=NORMAL;")
+        clause = " WHERE compacted_into IS NULL AND type IN (%s) AND ts >= ?" % ",".join(["?"] * len(types))
+        args: list[Any] = [*types, int(now - int(max_age))]
+        rows = conn.execute(f"SELECT id,type,source,text,meta,emb,dim,ts FROM memory_v2{clause}", args).fetchall()
+        conn.close()
+
+        scored = []
+        for (mid, mtype, source, text, meta, emb_blob, dim, ts) in rows:
+            if dim != len(qemb):
+                continue
+            emb = memory_v2.unpack_emb(emb_blob)
+            s = memory_v2.cosine(qemb, emb)
+            if s >= S.MEMORY_MIN_SIM:
+                scored.append((s, mid, mtype, source, text, ts))
+        scored.sort(key=lambda x: x[0], reverse=True)
+
+        for (s, mid, mtype, source, text, ts) in scored[: S.MEMORY_TOP_K]:
+            if not isinstance(text, str):
+                continue
+            line = f"- ({mtype}/{source}, {s:.3f}) {text}"
+            if total + len(line) > S.MEMORY_MAX_CHARS:
+                break
+            chunks.append(line)
+            total += len(line)
+    else:
+        res = await memory_search(last_user, S.MEMORY_TOP_K, S.MEMORY_MIN_SIM)
+        if not res.get("ok") or not res.get("results"):
+            return messages
+        for r in res["results"]:
+            t = r.get("text") or ""
+            if not isinstance(t, str):
+                continue
+            line = f"- ({r.get('score'):.3f}) {t}"
+            if total + len(line) > S.MEMORY_MAX_CHARS:
+                break
+            chunks.append(line)
+            total += len(line)
 
     if not chunks:
         return messages
 
     mem_text = "Retrieved memory (may be relevant):\n" + "\n".join(chunks)
     return [ChatMessage(role="system", content=mem_text)] + messages
+
+
+@app.post("/v1/memory/upsert")
+async def v1_memory_upsert(req: Request):
+    require_bearer(req)
+    if not S.MEMORY_V2_ENABLED:
+        raise HTTPException(status_code=400, detail="memory v2 disabled")
+
+    body = await req.json()
+    mr = MemoryUpsertRequest(**body)
+    if not isinstance(mr.text, str) or not mr.text.strip():
+        raise HTTPException(status_code=400, detail="text must be non-empty")
+
+    emb = await embed_text_for_memory_v2(mr.text)
+    out = memory_v2.upsert(
+        db_path=S.MEMORY_DB_PATH,
+        embed=lambda _t: emb,
+        text=mr.text,
+        mtype=mr.type,
+        source=(mr.source or "user"),
+        meta=mr.meta,
+        mid=mr.id,
+        ts=mr.ts,
+    )
+    return out
+
+
+@app.get("/v1/memory/list")
+async def v1_memory_list(
+    req: Request,
+    type: Optional[str] = None,
+    source: Optional[str] = None,
+    since_ts: Optional[int] = None,
+    max_age_sec: Optional[int] = None,
+    limit: int = 50,
+    include_compacted: bool = False,
+):
+    require_bearer(req)
+    if not S.MEMORY_V2_ENABLED:
+        raise HTTPException(status_code=400, detail="memory v2 disabled")
+
+    types = None
+    if type:
+        parts = [p.strip().lower() for p in type.split(",") if p.strip()]
+        types = [p for p in parts if p in {"fact", "preference", "project", "ephemeral"}]  # type: ignore[assignment]
+
+    sources = None
+    if source:
+        parts = [p.strip().lower() for p in source.split(",") if p.strip()]
+        sources = [p for p in parts if p in {"user", "system", "tool"}]  # type: ignore[assignment]
+
+    return memory_v2.list_items(
+        db_path=S.MEMORY_DB_PATH,
+        types=types,
+        sources=sources,
+        since_ts=since_ts,
+        max_age_sec=max_age_sec,
+        limit=max(1, min(int(limit), 500)),
+        include_compacted=bool(include_compacted),
+    )
+
+
+@app.post("/v1/memory/search")
+async def v1_memory_search(req: Request):
+    require_bearer(req)
+    if not S.MEMORY_V2_ENABLED:
+        raise HTTPException(status_code=400, detail="memory v2 disabled")
+
+    body = await req.json()
+    sr = MemorySearchRequest(**body)
+    if not sr.query.strip():
+        raise HTTPException(status_code=400, detail="query must be non-empty")
+
+    qemb = await embed_text_for_memory_v2(sr.query)
+
+    # Avoid embedding twice: pass a lambda that returns precomputed embedding for the query,
+    # but memory_v2.search embeds the query internally. Implement the search inline.
+    types = sr.types
+    sources = sr.sources
+    top_k = int(sr.top_k or S.MEMORY_TOP_K)
+    min_sim = float(sr.min_sim if sr.min_sim is not None else S.MEMORY_MIN_SIM)
+    max_age = int(sr.max_age_sec if sr.max_age_sec is not None else S.MEMORY_V2_MAX_AGE_SEC)
+
+    now = int(time.time())
+    where = []
+    args: list[Any] = []
+    if not sr.include_compacted:
+        where.append("compacted_into IS NULL")
+    if types:
+        where.append("type IN (%s)" % ",".join(["?"] * len(types)))
+        args.extend(list(types))
+    if sources:
+        where.append("source IN (%s)" % ",".join(["?"] * len(sources)))
+        args.extend(list(sources))
+    if max_age > 0:
+        where.append("ts >= ?")
+        args.append(int(now - max_age))
+    clause = (" WHERE " + " AND ".join(where)) if where else ""
+
+    conn = sqlite3.connect(S.MEMORY_DB_PATH)
+    conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute("PRAGMA synchronous=NORMAL;")
+    rows = conn.execute(f"SELECT id,type,source,text,emb,dim,ts FROM memory_v2{clause}", args).fetchall()
+    conn.close()
+
+    scored = []
+    for (mid, mtype, source, text, emb_blob, dim, ts) in rows:
+        if dim != len(qemb):
+            continue
+        emb = memory_v2.unpack_emb(emb_blob)
+        s = memory_v2.cosine(qemb, emb)
+        if s >= min_sim:
+            scored.append((s, mid, mtype, source, text, ts))
+    scored.sort(key=lambda x: x[0], reverse=True)
+
+    out = []
+    for (s, mid, mtype, source, text, ts) in scored[: max(1, min(top_k, 100))]:
+        out.append({"score": float(s), "id": mid, "type": mtype, "source": source, "text": text, "ts": ts})
+    return {"ok": True, "results": out}
+
+
+async def _summarize_for_compaction(items: list[dict], backend: Literal["ollama", "mlx"], model_name: str) -> str:
+    # Keep prompt deterministic and “future-proof”: summary is structured and not overly lossy.
+    lines = []
+    for it in items:
+        t = it.get("type")
+        s = it.get("source")
+        ts = it.get("ts")
+        text = it.get("text")
+        if not isinstance(text, str):
+            continue
+        lines.append(f"[{t}/{s} @ {ts}] {text}")
+
+    sys_prompt = (
+        "You are compacting an agent memory store. Produce a concise set of durable entries. "
+        "Rules: (1) preserve factual correctness, (2) keep preferences explicit, (3) keep project context actionable, "
+        "(4) avoid personal data, (5) do not invent. Output plain text, up to 25 bullet points."
+    )
+    user_text = "Memories to compact:\n" + "\n".join(lines)
+
+    cc = ChatCompletionRequest(
+        model=model_name,
+        messages=[
+            ChatMessage(role="system", content=sys_prompt),
+            ChatMessage(role="user", content=user_text),
+        ],
+        stream=False,
+    )
+
+    resp = await (call_mlx_openai(cc) if backend == "mlx" else call_ollama(cc, model_name))
+    msg = ((resp.get("choices") or [{}])[0].get("message") or {})
+    content = msg.get("content")
+    return content if isinstance(content, str) else ""
+
+
+@app.post("/v1/memory/compact")
+async def v1_memory_compact(req: Request):
+    require_bearer(req)
+    if not S.MEMORY_V2_ENABLED:
+        raise HTTPException(status_code=400, detail="memory v2 disabled")
+
+    body = await req.json()
+    cr = MemoryCompactRequest(**body)
+
+    # Select candidates
+    now = int(time.time())
+    max_age = int(cr.max_age_sec if cr.max_age_sec is not None else S.MEMORY_V2_MAX_AGE_SEC)
+    types = cr.types or _memory_v2_default_types()
+    max_items = max(1, min(int(cr.max_items), 200))
+
+    where = []
+    args: list[Any] = []
+    if not cr.include_compacted:
+        where.append("compacted_into IS NULL")
+    if types:
+        where.append("type IN (%s)" % ",".join(["?"] * len(types)))
+        args.extend(list(types))
+    if max_age > 0:
+        where.append("ts < ?")
+        args.append(int(now - max_age))
+    clause = (" WHERE " + " AND ".join(where)) if where else ""
+
+    conn = sqlite3.connect(S.MEMORY_DB_PATH)
+    conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute("PRAGMA synchronous=NORMAL;")
+    rows = conn.execute(
+        f"SELECT id,type,source,text,meta,ts FROM memory_v2{clause} ORDER BY ts ASC LIMIT ?",
+        (*args, max_items),
+    ).fetchall()
+    conn.close()
+
+    items = []
+    ids = []
+    for (mid, mtype, source, text, meta, ts) in rows:
+        ids.append(mid)
+        items.append({"id": mid, "type": mtype, "source": source, "text": text, "meta": meta, "ts": ts})
+
+    if len(items) < 2:
+        return {"ok": True, "compacted": 0, "message": "not enough items to compact"}
+
+    # Route summarization to a strong model.
+    hdrs = {k.lower(): v for k, v in req.headers.items()}
+    route = decide_route(
+        cfg=_router_cfg(),
+        request_model="default",
+        headers=hdrs,
+        messages=[{"role": "user", "content": "\n".join([it["text"] for it in items if isinstance(it.get("text"), str)])}],
+        has_tools=True,
+    )
+    backend: Literal["ollama", "mlx"] = route.backend
+    model_name = route.model
+
+    summary = await _summarize_for_compaction(items, backend, model_name)
+    if not summary.strip():
+        raise HTTPException(status_code=502, detail="compaction summarizer returned empty output")
+
+    # Insert compacted entry
+    emb = await embed_text_for_memory_v2(summary)
+    new_meta = {"compacted_ids": ids, "router_reason": route.reason}
+    out = memory_v2.upsert(
+        db_path=S.MEMORY_DB_PATH,
+        embed=lambda _t: emb,
+        text=summary,
+        mtype=cr.target_type,
+        source=cr.target_source,
+        meta=new_meta,
+        mid=None,
+        ts=int(time.time()),
+    )
+    new_id = out.get("id")
+    if isinstance(new_id, str):
+        memory_v2.mark_compacted(db_path=S.MEMORY_DB_PATH, ids=ids, into_id=new_id)
+    return {"ok": True, "compacted": len(ids), "new_id": new_id}
 
 
 @app.post("/v1/chat/completions")
@@ -773,35 +1294,23 @@ async def chat_completions(req: Request):
     cc = ChatCompletionRequest(**body)
     cc.messages = await inject_memory(cc.messages)
 
-
-    backend = choose_backend(cc.model)
-    model_name = normalize_model(cc.model, backend)
+    # Policy router chooses backend/model unless request explicitly pins it.
+    hdrs = {k.lower(): v for k, v in req.headers.items()}
+    route = decide_route(
+        cfg=_router_cfg(),
+        request_model=cc.model,
+        headers=hdrs,
+        messages=[m.model_dump(exclude_none=True) for m in cc.messages],
+        has_tools=bool(cc.tools),
+    )
+    backend: Literal["ollama", "mlx"] = route.backend
+    model_name = route.model
 
     if cc.stream and cc.tools:
         raise HTTPException(status_code=400, detail="stream=true not supported when tools are provided")
 
-    # 1) Backend override via header (highest priority)
-    backend_hdr = (req.headers.get("x-backend") or "").strip().lower()
-    if backend_hdr in {"ollama", "mlx"}:
-        backend: Literal["ollama", "mlx"] = backend_hdr  # type: ignore[assignment]
-    else:
-        # 2) Backend by model prefix / alias
-        backend = choose_backend(cc.model)
-
-        # 3) Optional auto-policy (only when no explicit prefix/alias forced it)
-        # If model explicitly indicates a backend, do not override it.
-        model_l = (cc.model or "").strip().lower()
-        explicitly_pinned = model_l.startswith(("ollama:", "mlx:")) or model_l in {"ollama", "mlx", "ollama-default", "mlx-default"}
-        if not explicitly_pinned:
-            if cc.tools:
-                backend = "ollama"
-            else:
-                size = approx_text_size(cc.messages)
-                # tune threshold; start conservative
-                if size >= 40_000:
-                    backend = "mlx"
-
-    model_name = normalize_model(cc.model, backend)
+    # Keep legacy normalization behavior for explicit model override values
+    # (decide_route already normalizes defaults and prefixes).
 
     # For MLX OpenAI server, ensure the request model matches what it expects
     cc_routed = ChatCompletionRequest(
@@ -826,6 +1335,7 @@ async def chat_completions(req: Request):
         out = StreamingResponse(gen, media_type="text/event-stream")
         out.headers["X-Backend-Used"] = backend
         out.headers["X-Model-Used"] = model_name
+        out.headers["X-Router-Reason"] = route.reason
         return out
 
     # Non-stream
@@ -837,6 +1347,7 @@ async def chat_completions(req: Request):
     out = JSONResponse(resp)
     out.headers["X-Backend-Used"] = backend
     out.headers["X-Model-Used"] = model_name
+    out.headers["X-Router-Reason"] = route.reason
     return out
 
 
@@ -861,8 +1372,16 @@ async def completions(req: Request):
         stream=bool(cr.stream),
     )
 
-    backend = choose_backend_from_request(req, cc.model)
-    model_name = normalize_model(cc.model, backend)
+    hdrs = {k.lower(): v for k, v in req.headers.items()}
+    route = decide_route(
+        cfg=_router_cfg(),
+        request_model=cc.model,
+        headers=hdrs,
+        messages=[m.model_dump(exclude_none=True) for m in cc.messages],
+        has_tools=False,
+    )
+    backend: Literal["ollama", "mlx"] = route.backend
+    model_name = route.model
 
     if cc.stream:
         stream_id = _new_id("cmpl")
@@ -933,6 +1452,7 @@ async def completions(req: Request):
         out = StreamingResponse(gen(), media_type="text/event-stream")
         out.headers["X-Backend-Used"] = backend
         out.headers["X-Model-Used"] = model_name
+        out.headers["X-Router-Reason"] = route.reason
         return out
 
     # Non-stream completion
@@ -963,6 +1483,7 @@ async def completions(req: Request):
     out = JSONResponse(resp)
     out.headers["X-Backend-Used"] = backend
     out.headers["X-Model-Used"] = model_name
+    out.headers["X-Router-Reason"] = route.reason
     return out
 
 
