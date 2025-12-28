@@ -1,0 +1,4 @@
+* text=auto
+
+# Shell scripts should be LF for macOS/Linux
+*.sh text eol=lf
