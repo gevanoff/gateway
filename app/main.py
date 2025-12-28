@@ -2,6 +2,8 @@ import os
 import json
 import shlex
 import subprocess
+import logging
+import sys
 from typing import Any, Dict, List, Optional, Literal
 
 import httpx
@@ -48,6 +50,33 @@ class Settings(BaseSettings):
 
 S = Settings()
 app = FastAPI(title="Local AI Gateway", version="0.1")
+
+# ---------------------------
+# Logging
+# ---------------------------
+
+logger = logging.getLogger("gateway")
+if not logger.handlers:
+    _handler = logging.StreamHandler(stream=sys.stdout)
+    _handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    logger.addHandler(_handler)
+logger.setLevel(os.getenv("GATEWAY_LOG_LEVEL", "INFO").upper())
+logger.propagate = False
+
+
+@app.middleware("http")
+async def log_requests(req: Request, call_next):
+    start = time.time()
+    resp = None
+    try:
+        resp = await call_next(req)
+        return resp
+    finally:
+        dur_ms = (time.time() - start) * 1000.0
+        status = resp.status_code if resp is not None else 500
+        path = req.url.path
+        method = req.method
+        logger.info("%s %s -> %d (%.1fms)", method, path, status, dur_ms)
 
 # ---------------------------
 # Memory (SQLite + vectors)
@@ -692,9 +721,13 @@ async def embeddings(req: Request):
         else:
             embs = await embed_mlx(texts, model)
     except httpx.HTTPStatusError as e:
-        raise HTTPException(status_code=502, detail={"upstream": backend, "status": e.response.status_code, "body": e.response.text[:5000]})
+        detail = {"upstream": backend, "status": e.response.status_code, "body": e.response.text[:5000]}
+        logger.warning("/v1/embeddings upstream HTTP error: %s", detail)
+        raise HTTPException(status_code=502, detail=detail)
     except httpx.RequestError as e:
-        raise HTTPException(status_code=502, detail={"upstream": backend, "error": str(e)})
+        detail = {"upstream": backend, "error": str(e)}
+        logger.warning("/v1/embeddings upstream request error: %s", detail)
+        raise HTTPException(status_code=502, detail=detail)
 
     # OpenAI-ish response
     return {
