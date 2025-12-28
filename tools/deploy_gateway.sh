@@ -32,7 +32,10 @@ HEALTH_URL="http://127.0.0.1:8800/health"
 PORT="8800"
 LOG_DIR="/var/log/gateway"
 ERR_LOG="${LOG_DIR}/gateway.err.log"
+OUT_LOG="${LOG_DIR}/gateway.out.log"
 PYTHON_BIN="${RUNTIME_ROOT}/env/bin/python"
+CURL_CONNECT_TIMEOUT_SEC="1"
+CURL_MAX_TIME_SEC="2"
 
 # ---- safety checks ----
 if [[ ! -d "${REPO_ROOT}/.git" ]]; then
@@ -108,7 +111,8 @@ fi
 # ---- verify ----
 echo "Waiting for health endpoint..."
 for i in {1..30}; do
-  if curl -fsS "${HEALTH_URL}" >/dev/null 2>&1; then
+  # Add explicit timeouts so a stalled connect/read can't hang the deploy.
+  if curl -fsS --connect-timeout "${CURL_CONNECT_TIMEOUT_SEC}" --max-time "${CURL_MAX_TIME_SEC}" "${HEALTH_URL}" >/dev/null 2>&1; then
     echo "OK: health endpoint responds"
     break
   fi
@@ -119,6 +123,8 @@ for i in {1..30}; do
     sudo launchctl print "system/${LAUNCHD_LABEL}" | sed -n '1,200p' || true
     echo "---- recent stderr ----"
     sudo tail -n 200 "${ERR_LOG}" 2>/dev/null || true
+    echo "---- recent stdout ----"
+    sudo tail -n 200 "${OUT_LOG}" 2>/dev/null || true
     exit 1
   fi
 done
