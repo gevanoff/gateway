@@ -156,7 +156,9 @@ async def stream_ollama_chat_as_openai(req: ChatCompletionRequest, model_name: s
         try:
             async with client.stream("POST", f"{S.OLLAMA_BASE_URL}/api/chat", json=payload) as r:
                 r.raise_for_status()
-                async for chunk in ollama_ndjson_to_openai_sse(r, model_name=model_name):
+                # For OpenAI-compatible responses, keep the backend prefix so clients can
+                # correlate streamed chunks with /v1/models IDs.
+                async for chunk in ollama_ndjson_to_openai_sse(r, model_name=f"ollama:{model_name}"):
                     if chunk == sse_done():
                         done_sent = True
                     yield chunk
