@@ -66,10 +66,10 @@ if [[ ! -x "${PYTHON_BIN}" ]]; then
   exit 1
 fi
 
-# The repo layout is /app/main.py, so the deployed entrypoint is ${APP_DIR}/app/main.py.
-if [[ ! -f "${APP_DIR}/app/main.py" ]]; then
-  echo "ERROR: expected ASGI module not found at ${APP_DIR}/app/main.py" >&2
-  echo "Hint: your launchd plist should use 'app.main:app' (not 'main:app')" >&2
+# The repo layout is app/main.py, so the deployed entrypoint is ${APP_DIR}/app/main.py
+if [[ ! -f "${REPO_ROOT}/app/main.py" ]]; then
+  echo "ERROR: expected source module not found at ${REPO_ROOT}/app/main.py" >&2
+  echo "Hint: repo layout changed? update the rsync source or the plist entrypoint." >&2
   exit 1
 fi
 
@@ -97,6 +97,12 @@ sudo rsync -a --delete \
   --exclude 'logs/' --exclude '*.log' \
   --exclude 'cache/' --exclude 'models/' --exclude 'huggingface/' --exclude 'hf_cache/' \
   "${REPO_ROOT}/" "${APP_DIR}/"
+
+if [[ ! -f "${APP_DIR}/app/main.py" ]]; then
+  echo "ERROR: deploy completed but ASGI module missing at ${APP_DIR}/app/main.py" >&2
+  echo "Hint: check rsync excludes and that ${REPO_ROOT}/app/main.py exists." >&2
+  exit 1
+fi
 
 # ---- permissions ----
 sudo chown -R gateway:staff "${APP_DIR}"
