@@ -27,7 +27,18 @@ async def ollama_ndjson_to_openai_sse(
     """
     chunk_id = new_id("chatcmpl")
     created = now_unix()
-    sent_role = False
+    sent_role = True
+
+    # First chunk: announce assistant role (common expectation)
+    yield sse(
+        {
+            "id": chunk_id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": model_name,
+            "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}],
+        }
+    )
 
     async for line in resp.aiter_lines():
         if not line:
