@@ -66,6 +66,13 @@ if [[ ! -x "${PYTHON_BIN}" ]]; then
   exit 1
 fi
 
+# The repo layout is /app/main.py, so the deployed entrypoint is ${APP_DIR}/app/main.py.
+if [[ ! -f "${APP_DIR}/app/main.py" ]]; then
+  echo "ERROR: expected ASGI module not found at ${APP_DIR}/app/main.py" >&2
+  echo "Hint: your launchd plist should use 'app.main:app' (not 'main:app')" >&2
+  exit 1
+fi
+
 # ---- ensure runtime layout expected by app ----
 # main.py reads env from /var/lib/gateway/app/.env, uses /var/lib/gateway/tools, and writes /var/lib/gateway/data/memory.sqlite
 sudo mkdir -p "${RUNTIME_ROOT}/data" "${RUNTIME_ROOT}/tools"
