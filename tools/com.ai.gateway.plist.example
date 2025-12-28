@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <key>Label</key>
+    <string>com.ai.gateway</string>
+
+    <key>UserName</key>
+    <string>gateway</string>
+
+    <key>WorkingDirectory</key>
+    <string>/var/lib/gateway/app</string>
+
+    <key>ProgramArguments</key>
+    <array>
+      <string>/var/lib/gateway/env/bin/python</string>
+      <string>-m</string>
+      <string>uvicorn</string>
+      <string>main:app</string>
+      <string>--host</string>
+      <string>0.0.0.0</string>
+      <string>--port</string>
+      <string>8800</string>
+    </array>
+
+        <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+      <key>HOME</key>
+      <string>/var/lib/gateway</string>
+      <key>PYTHONUNBUFFERED</key>
+      <string>1</string>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/var/log/gateway/gateway.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/var/log/gateway/gateway.err.log</string>
+  </dict>
+</plist>
