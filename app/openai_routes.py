@@ -70,8 +70,16 @@ async def list_models(req: Request):
     data["data"].append({"id": "mlx", "object": "model", "created": now, "owned_by": "gateway"})
 
     # Add configured aliases so clients can discover stable names.
-    for alias_name in sorted(load_aliases().keys()):
-        data["data"].append({"id": alias_name, "object": "model", "created": now, "owned_by": "gateway"})
+    aliases = load_aliases()
+    for alias_name in sorted(aliases.keys()):
+        a = aliases[alias_name]
+        item: Dict[str, Any] = {"id": alias_name, "object": "model", "created": now, "owned_by": "gateway"}
+        # Extra fields are safe for most OpenAI-compatible clients and helpful for debugging.
+        item["backend"] = a.backend
+        item["upstream_model"] = a.upstream_model
+        if a.context_window:
+            item["context_window"] = a.context_window
+        data["data"].append(item)
 
     return data
 
