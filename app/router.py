@@ -4,7 +4,7 @@ import json
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, Literal, Optional, Tuple
 
-from app.model_aliases import load_aliases
+from app.model_aliases import get_alias, get_aliases
 
 Backend = Literal["ollama", "mlx"]
 
@@ -106,7 +106,7 @@ def decide_route(
         normalized = _normalize_model(request_model, backend, cfg)
         return RouteDecision(backend=backend, model=normalized, reason="override:x-backend")
 
-    aliases = load_aliases()
+    aliases = get_aliases()
 
     # Model aliases: if request_model is an alias key (coder/fast/default/long/etc),
     # resolve directly to a stable backend + upstream model.
@@ -133,19 +133,28 @@ def decide_route(
 
     size = _approx_text_size(messages or [])
 
+    # If aliases declare a context window, prefer it for thresholding.
+    long_alias = get_alias("long")
+    long_threshold = int(long_alias.context_window) if (long_alias and long_alias.context_window) else cfg.long_context_chars_threshold
+
     if has_tools:
-        # Prefer alias-driven policy if configured.
-        a = aliases.get("default")
-        if a:
+        # Deterministic rule: tools -> strongest tool-capable model.
+        a = get_alias("default")
+        if a and a.tools is not False:
             b = a.backend  # type: ignore[assignment]
             return RouteDecision(backend=b, model=_normalize_model(a.upstream_model, b, cfg), reason="policy:tools->alias:default")
+        # If default explicitly doesn't support tools, prefer coder if it does.
+        a = get_alias("coder")
+        if a and a.tools is not False:
+            b = a.backend  # type: ignore[assignment]
+            return RouteDecision(backend=b, model=_normalize_model(a.upstream_model, b, cfg), reason="policy:tools->alias:coder")
         if backend == "ollama":
             return RouteDecision(backend=backend, model=cfg.ollama_strong_model, reason="policy:tools->strong")
         return RouteDecision(backend=backend, model=cfg.mlx_strong_model, reason="policy:tools->strong")
 
-    if size >= cfg.long_context_chars_threshold:
+    if size >= long_threshold:
         # Prefer MLX for long-context if available, otherwise keep backend but use strong model.
-        a = aliases.get("long")
+        a = get_alias("long")
         if a:
             b = a.backend  # type: ignore[assignment]
             return RouteDecision(backend=b, model=_normalize_model(a.upstream_model, b, cfg), reason="policy:long_context->alias:long")
@@ -156,7 +165,7 @@ def decide_route(
         return RouteDecision(backend=backend, model=cfg.mlx_strong_model, reason="policy:long_context->strong")
 
     # Default: fast/cheap on chosen backend
-    a = aliases.get("fast")
+    a = get_alias("fast")
     if a:
         b = a.backend  # type: ignore[assignment]
         return RouteDecision(backend=b, model=_normalize_model(a.upstream_model, b, cfg), reason="policy:fast->alias:fast")

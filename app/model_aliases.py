@@ -13,6 +13,7 @@ class ModelAlias:
     backend: str  # "ollama" | "mlx"
     upstream_model: str
     context_window: Optional[int] = None
+    tools: Optional[bool] = None
 
 
 def _default_aliases() -> Dict[str, ModelAlias]:
@@ -26,10 +27,16 @@ def _default_aliases() -> Dict[str, ModelAlias]:
         return S.OLLAMA_MODEL_FAST if backend == "ollama" else S.MLX_MODEL_FAST
 
     return {
-        "default": ModelAlias(backend=default_backend, upstream_model=strong_for(default_backend)),
-        "fast": ModelAlias(backend=default_backend, upstream_model=fast_for(default_backend)),
-        "coder": ModelAlias(backend="ollama", upstream_model=S.OLLAMA_MODEL_STRONG),
-        "long": ModelAlias(backend="mlx", upstream_model=S.MLX_MODEL_STRONG, context_window=S.ROUTER_LONG_CONTEXT_CHARS),
+        # These four are the canonical policy surface.
+        "default": ModelAlias(backend=default_backend, upstream_model=strong_for(default_backend), tools=True),
+        "fast": ModelAlias(backend=default_backend, upstream_model=fast_for(default_backend), tools=False),
+        "coder": ModelAlias(backend="ollama", upstream_model=S.OLLAMA_MODEL_STRONG, tools=True),
+        "long": ModelAlias(
+            backend="mlx",
+            upstream_model=S.MLX_MODEL_STRONG,
+            context_window=S.ROUTER_LONG_CONTEXT_CHARS,
+            tools=False,
+        ),
     }
 
 
@@ -61,7 +68,12 @@ def _parse_alias_value(v: Any) -> Optional[ModelAlias]:
         context_window: Optional[int] = None
         if isinstance(context, int) and context > 0:
             context_window = context
-        return ModelAlias(backend=backend, upstream_model=model, context_window=context_window)
+        tools_raw = v.get("tools")
+        tools: Optional[bool] = None
+        if isinstance(tools_raw, bool):
+            tools = tools_raw
+
+        return ModelAlias(backend=backend, upstream_model=model, context_window=context_window, tools=tools)
 
     return None
 
@@ -99,11 +111,34 @@ def load_aliases() -> Dict[str, ModelAlias]:
     return aliases
 
 
+_ALIASES_CACHE: Optional[Dict[str, ModelAlias]] = None
+
+
+def get_aliases() -> Dict[str, ModelAlias]:
+    """Load aliases once per process.
+
+    This keeps routing deterministic and cheap per request.
+    To change aliases, update the JSON file/env and restart the gateway.
+    """
+
+    global _ALIASES_CACHE
+    if _ALIASES_CACHE is None:
+        _ALIASES_CACHE = load_aliases()
+    return _ALIASES_CACHE
+
+
 def resolve_alias(model: str) -> Optional[Tuple[str, str]]:
     m = (model or "").strip().lower()
     if not m:
         return None
-    a = load_aliases().get(m)
+    a = get_aliases().get(m)
     if not a:
         return None
     return a.backend, a.upstream_model
+
+
+def get_alias(alias_name: str) -> Optional[ModelAlias]:
+    k = (alias_name or "").strip().lower()
+    if not k:
+        return None
+    return get_aliases().get(k)

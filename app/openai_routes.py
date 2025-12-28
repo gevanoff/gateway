@@ -17,7 +17,7 @@ from app.models import (
     RerankRequest,
 )
 from app.openai_utils import new_id, now_unix, sse_done
-from app.model_aliases import load_aliases
+from app.model_aliases import get_aliases
 from app.router import decide_route
 from app.router_cfg import router_cfg
 from app.tool_loop import tool_loop
@@ -70,7 +70,7 @@ async def list_models(req: Request):
     data["data"].append({"id": "mlx", "object": "model", "created": now, "owned_by": "gateway"})
 
     # Add configured aliases so clients can discover stable names.
-    aliases = load_aliases()
+    aliases = get_aliases()
     for alias_name in sorted(aliases.keys()):
         a = aliases[alias_name]
         item: Dict[str, Any] = {"id": alias_name, "object": "model", "created": now, "owned_by": "gateway"}
@@ -79,6 +79,8 @@ async def list_models(req: Request):
         item["upstream_model"] = a.upstream_model
         if a.context_window:
             item["context_window"] = a.context_window
+        if a.tools is not None:
+            item["tools"] = a.tools
         data["data"].append(item)
 
     return data
@@ -107,6 +109,16 @@ async def chat_completions(req: Request):
     )
     backend: Literal["ollama", "mlx"] = route.backend
     model_name = route.model
+
+    logger.debug(
+        "route chat.completions model=%r stream=%s tools=%s -> backend=%s upstream_model=%s reason=%s",
+        cc.model,
+        bool(cc.stream),
+        bool(cc.tools),
+        backend,
+        model_name,
+        route.reason,
+    )
 
     if cc.stream and cc.tools:
         raise HTTPException(status_code=400, detail="stream=true not supported when tools are provided")
