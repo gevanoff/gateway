@@ -21,6 +21,8 @@
       <string>0.0.0.0</string>
       <string>--port</string>
       <string>8800</string>
+      <string>--log-config</string>
+      <string>/var/lib/gateway/app/tools/uvicorn_log_config.json</string>
     </array>
 
         <key>RunAtLoad</key>

@@ -55,13 +55,8 @@ app = FastAPI(title="Local AI Gateway", version="0.1")
 # Logging
 # ---------------------------
 
-logger = logging.getLogger("gateway")
-if not logger.handlers:
-    _handler = logging.StreamHandler(stream=sys.stdout)
-    _handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
-    logger.addHandler(_handler)
+logger = logging.getLogger("uvicorn.error")
 logger.setLevel(os.getenv("GATEWAY_LOG_LEVEL", "INFO").upper())
-logger.propagate = False
 
 
 @app.middleware("http")
