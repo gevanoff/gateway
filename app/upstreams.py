@@ -9,6 +9,7 @@ from fastapi import HTTPException
 from app.config import S, logger
 from app.models import ChatCompletionRequest
 from app.openai_utils import new_id, now_unix, sse, sse_done
+from app.streaming import ollama_ndjson_to_openai_sse, passthrough_sse
 
 
 async def call_mlx_openai(req: ChatCompletionRequest) -> Dict[str, Any]:
@@ -126,9 +127,8 @@ async def stream_mlx_openai_chat(payload: Dict[str, Any]) -> AsyncIterator[bytes
                 headers={"accept": "text/event-stream"},
             ) as r:
                 r.raise_for_status()
-                async for chunk in r.aiter_bytes():
-                    if chunk:
-                        yield chunk
+                async for chunk in passthrough_sse(r):
+                    yield chunk
         except httpx.HTTPStatusError as e:
             detail = {"upstream": "mlx", "status": e.response.status_code, "body": e.response.text[:5000]}
             yield sse({"error": {"message": "Upstream error", "type": "upstream_error", "param": None, "code": None, "detail": detail}})
@@ -150,57 +150,22 @@ async def stream_ollama_chat_as_openai(req: ChatCompletionRequest, model_name: s
     if req.temperature is not None:
         payload.setdefault("options", {})["temperature"] = req.temperature
 
-    stream_id = new_id("chatcmpl")
-    created = now_unix()
-    sent_role = False
+    done_sent = False
 
     async with httpx.AsyncClient(timeout=None) as client:
         try:
             async with client.stream("POST", f"{S.OLLAMA_BASE_URL}/api/chat", json=payload) as r:
                 r.raise_for_status()
-                async for line in r.aiter_lines():
-                    if not line:
-                        continue
-                    try:
-                        j = json.loads(line)
-                    except Exception:
-                        continue
-
-                    msg = (j or {}).get("message") or {}
-                    delta_content = msg.get("content")
-                    if not isinstance(delta_content, str):
-                        delta_content = ""
-
-                    delta: Dict[str, Any] = {"content": delta_content}
-                    if not sent_role:
-                        delta["role"] = "assistant"
-                        sent_role = True
-
-                    chunk = {
-                        "id": stream_id,
-                        "object": "chat.completion.chunk",
-                        "created": created,
-                        "model": model_name,
-                        "choices": [{"index": 0, "delta": delta, "finish_reason": None}],
-                    }
-                    yield sse(chunk)
-
-                    if j.get("done") is True:
-                        finish = j.get("done_reason") or "stop"
-                        final_chunk = {
-                            "id": stream_id,
-                            "object": "chat.completion.chunk",
-                            "created": created,
-                            "model": model_name,
-                            "choices": [{"index": 0, "delta": {}, "finish_reason": finish}],
-                        }
-                        yield sse(final_chunk)
-                        break
+                async for chunk in ollama_ndjson_to_openai_sse(r, model_name=model_name):
+                    if chunk == sse_done():
+                        done_sent = True
+                    yield chunk
         except httpx.HTTPStatusError as e:
             detail = {"upstream": "ollama", "status": e.response.status_code, "body": e.response.text[:5000]}
             yield sse({"error": {"message": "Upstream error", "type": "upstream_error", "param": None, "code": None, "detail": detail}})
         except httpx.RequestError as e:
             detail = {"upstream": "ollama", "error": str(e)}
             yield sse({"error": {"message": "Upstream error", "type": "upstream_error", "param": None, "code": None, "detail": detail}})
-        finally:
+
+        if not done_sent:
             yield sse_done()
