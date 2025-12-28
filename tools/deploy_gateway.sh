@@ -77,12 +77,12 @@ fi
 # main.py reads env from /var/lib/gateway/app/.env, uses /var/lib/gateway/tools, and writes /var/lib/gateway/data/memory.sqlite
 sudo mkdir -p "${RUNTIME_ROOT}/data" "${RUNTIME_ROOT}/tools"
 sudo chown -R gateway:staff "${RUNTIME_ROOT}/data" "${RUNTIME_ROOT}/tools"
-sudo chmod -R u+rwX,go-rwx "${RUNTIME_ROOT}/data" "${RUNTIME_ROOT}/tools"
+sudo chmod -R u+rwX,g+rX,o-rwx "${RUNTIME_ROOT}/data" "${RUNTIME_ROOT}/tools"
 
 # launchd won't create parent log directories; the plist points stdout/stderr into /var/log/gateway
 sudo mkdir -p "${LOG_DIR}"
 sudo chown -R gateway:staff "${LOG_DIR}"
-sudo chmod -R u+rwX,go-rwx "${LOG_DIR}"
+sudo chmod -R u+rwX,g+rX,o-rwx "${LOG_DIR}"
 
 # ---- deploy code (exclude runtime/state/dev noise) ----
 # NOTE: trailing slashes matter: sync repo CONTENTS into app dir
@@ -106,7 +106,7 @@ fi
 
 # ---- permissions ----
 sudo chown -R gateway:staff "${APP_DIR}"
-sudo chmod -R u+rwX,go-rwx "${APP_DIR}"
+sudo chmod -R u+rwX,g+rX,o-rwx "${APP_DIR}"
 
 # ---- restart service ----
 # kickstart alone is fine if it is already bootstrapped; bootstrap if missing.
