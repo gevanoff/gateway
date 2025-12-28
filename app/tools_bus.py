@@ -6,6 +6,7 @@ import os
 import shlex
 import subprocess
 from typing import Any, Dict
+from pathlib import Path
 from urllib.parse import urlparse
 
 import httpx
@@ -30,8 +31,17 @@ def tool_shell(args: Dict[str, Any]) -> Dict[str, Any]:
     cwd = S.TOOLS_SHELL_CWD
     os.makedirs(cwd, exist_ok=True)
 
+    allowed = {p.strip() for p in (S.TOOLS_SHELL_ALLOWED_CMDS or "").split(",") if p.strip()}
+    if not allowed:
+        return {"ok": False, "error": "shell tool not configured (TOOLS_SHELL_ALLOWED_CMDS empty)"}
+
     try:
         parts = shlex.split(cmd)
+        if not parts:
+            return {"ok": False, "error": "cmd must be a non-empty string"}
+        exe = parts[0]
+        if exe not in allowed:
+            return {"ok": False, "error": f"command not allowed: {exe}"}
         cp = subprocess.run(
             parts,
             cwd=cwd,
@@ -58,9 +68,36 @@ def tool_read_file(args: Dict[str, Any]) -> Dict[str, Any]:
     path = args.get("path")
     if not isinstance(path, str) or not path:
         return {"ok": False, "error": "path must be a non-empty string"}
+    roots = [r.strip() for r in (S.TOOLS_FS_ROOTS or "").split(",") if r.strip()]
+    if not roots:
+        return {"ok": False, "error": "fs tool not configured (TOOLS_FS_ROOTS empty)"}
+
     try:
-        with open(path, "r", encoding="utf-8") as f:
-            return {"ok": True, "content": f.read()}
+        p = Path(path)
+        if not p.is_absolute():
+            p = Path(roots[0]) / p
+        p = p.resolve()
+
+        allowed_root = False
+        for r in roots:
+            try:
+                root_path = Path(r).resolve()
+                p.relative_to(root_path)
+                allowed_root = True
+                break
+            except Exception:
+                continue
+        if not allowed_root:
+            return {"ok": False, "error": "path outside allowed roots"}
+
+        max_bytes = int(S.TOOLS_FS_MAX_BYTES)
+        with open(p, "rb") as f:
+            data = f.read(max_bytes + 1)
+
+        truncated = len(data) > max_bytes
+        data = data[:max_bytes]
+        text = data.decode("utf-8", errors="replace")
+        return {"ok": True, "path": str(p), "truncated": truncated, "content": text}
     except Exception as e:
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
@@ -68,17 +105,45 @@ def tool_read_file(args: Dict[str, Any]) -> Dict[str, Any]:
 def tool_write_file(args: Dict[str, Any]) -> Dict[str, Any]:
     if not S.TOOLS_ALLOW_FS:
         return {"ok": False, "error": "fs tool disabled"}
+    if not S.TOOLS_ALLOW_FS_WRITE:
+        return {"ok": False, "error": "fs write disabled"}
     path = args.get("path")
     content = args.get("content", "")
     if not isinstance(path, str) or not path:
         return {"ok": False, "error": "path must be a non-empty string"}
     if not isinstance(content, str):
         return {"ok": False, "error": "content must be a string"}
+    roots = [r.strip() for r in (S.TOOLS_FS_ROOTS or "").split(",") if r.strip()]
+    if not roots:
+        return {"ok": False, "error": "fs tool not configured (TOOLS_FS_ROOTS empty)"}
+
     try:
-        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
+        p = Path(path)
+        if not p.is_absolute():
+            p = Path(roots[0]) / p
+        p = p.resolve()
+
+        allowed_root = False
+        for r in roots:
+            try:
+                root_path = Path(r).resolve()
+                p.relative_to(root_path)
+                allowed_root = True
+                break
+            except Exception:
+                continue
+        if not allowed_root:
+            return {"ok": False, "error": "path outside allowed roots"}
+
+        # Basic size limit to avoid large writes.
+        max_bytes = int(S.TOOLS_FS_MAX_BYTES)
+        if len(content.encode("utf-8")) > max_bytes:
+            return {"ok": False, "error": f"content too large (>{max_bytes} bytes)"}
+
+        os.makedirs(str(p.parent), exist_ok=True)
+        with open(p, "w", encoding="utf-8") as f:
             f.write(content)
-        return {"ok": True}
+        return {"ok": True, "path": str(p)}
     except Exception as e:
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
@@ -150,11 +215,49 @@ def tool_http_fetch(args: Dict[str, Any]) -> Dict[str, Any]:
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
 
+def tool_git(args: Dict[str, Any]) -> Dict[str, Any]:
+    if not S.TOOLS_ALLOW_GIT:
+        return {"ok": False, "error": "git tool disabled"}
+
+    argv = args.get("args")
+    if not isinstance(argv, list) or not argv or not all(isinstance(x, str) and x for x in argv):
+        return {"ok": False, "error": "args must be a non-empty list of strings"}
+
+    subcmd = argv[0].strip()
+    allowed_subcmds = {"status", "diff", "log", "show", "rev-parse", "ls-files"}
+    if subcmd not in allowed_subcmds:
+        return {"ok": False, "error": f"git subcommand not allowed: {subcmd}"}
+
+    cwd = (S.TOOLS_GIT_CWD or "").strip() or S.TOOLS_SHELL_CWD
+    os.makedirs(cwd, exist_ok=True)
+
+    try:
+        cp = subprocess.run(
+            ["git", *argv],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=S.TOOLS_GIT_TIMEOUT_SEC,
+            check=False,
+        )
+        return {
+            "ok": True,
+            "returncode": cp.returncode,
+            "stdout": cp.stdout[-20000:],
+            "stderr": cp.stderr[-20000:],
+        }
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": f"timeout after {S.TOOLS_GIT_TIMEOUT_SEC}s"}
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+
 TOOL_IMPL = {
     "shell": tool_shell,
     "read_file": tool_read_file,
     "write_file": tool_write_file,
     "http_fetch": tool_http_fetch,
+    "git": tool_git,
 }
 
 
@@ -170,6 +273,8 @@ def _allowed_tool_names() -> set[str]:
         allowed.update({"read_file", "write_file"})
     if S.TOOLS_ALLOW_HTTP_FETCH:
         allowed.add("http_fetch")
+    if S.TOOLS_ALLOW_GIT:
+        allowed.add("git")
     return allowed
 
 
@@ -205,6 +310,16 @@ TOOL_SCHEMAS: Dict[str, Dict[str, Any]] = {
             "type": "object",
             "properties": {"path": {"type": "string"}, "content": {"type": "string"}},
             "required": ["path", "content"],
+            "additionalProperties": False,
+        },
+    },
+    "git": {
+        "name": "git",
+        "description": "Run a limited set of git subcommands in a configured repo directory.",
+        "parameters": {
+            "type": "object",
+            "properties": {"args": {"type": "array", "items": {"type": "string"}}},
+            "required": ["args"],
             "additionalProperties": False,
         },
     },

@@ -4,6 +4,8 @@ import json
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, Literal, Optional, Tuple
 
+from app.model_aliases import resolve_alias
+
 Backend = Literal["ollama", "mlx"]
 
 
@@ -103,6 +105,13 @@ def decide_route(
         backend: Backend = hdr_backend  # type: ignore[assignment]
         normalized = _normalize_model(request_model, backend, cfg)
         return RouteDecision(backend=backend, model=normalized, reason="override:x-backend")
+
+    # Model aliases: coder/fast/default/long, etc.
+    resolved = resolve_alias(request_model)
+    if resolved:
+        backend = resolved[0]  # type: ignore[assignment]
+        normalized = _normalize_model(resolved[1], backend, cfg)
+        return RouteDecision(backend=backend, model=normalized, reason="alias:model")
 
     backend = _choose_backend_by_model(request_model, cfg.default_backend)
 

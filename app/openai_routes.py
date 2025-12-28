@@ -17,6 +17,7 @@ from app.models import (
     RerankRequest,
 )
 from app.openai_utils import new_id, now_unix, sse_done
+from app.model_aliases import load_aliases
 from app.router import decide_route
 from app.router_cfg import router_cfg
 from app.tool_loop import tool_loop
@@ -67,6 +68,10 @@ async def list_models(req: Request):
 
     data["data"].append({"id": "ollama", "object": "model", "created": now, "owned_by": "gateway"})
     data["data"].append({"id": "mlx", "object": "model", "created": now, "owned_by": "gateway"})
+
+    # Add configured aliases so clients can discover stable names.
+    for alias_name in sorted(load_aliases().keys()):
+        data["data"].append({"id": alias_name, "object": "model", "created": now, "owned_by": "gateway"})
 
     return data
 
