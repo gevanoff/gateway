@@ -4,11 +4,12 @@ import shlex
 import subprocess
 import logging
 import sys
-from typing import Any, Dict, List, Optional, Literal
+import secrets
+from typing import Any, Dict, List, Optional, Literal, AsyncIterator
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request, Depends
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -174,6 +175,35 @@ class ChatCompletionRequest(BaseModel):
 class EmbeddingsRequest(BaseModel):
     model: str
     input: Any  # str | list[str]
+
+class CompletionRequest(BaseModel):
+    model: str
+    prompt: Any  # str | list[str]
+    max_tokens: Optional[int] = None
+    temperature: Optional[float] = None
+    stream: Optional[bool] = False
+
+class RerankRequest(BaseModel):
+    model: Optional[str] = None
+    query: str
+    documents: List[str]
+    top_n: Optional[int] = None
+
+
+def _now_unix() -> int:
+    return int(time.time())
+
+
+def _new_id(prefix: str) -> str:
+    return f"{prefix}-{secrets.token_hex(12)}"
+
+
+def _sse(data_obj: Any) -> bytes:
+    return f"data: {json.dumps(data_obj, separators=(',', ':'))}\n\n".encode("utf-8")
+
+
+def _sse_done() -> bytes:
+    return b"data: [DONE]\n\n"
 
 
 # ---------------------------
@@ -366,11 +396,103 @@ async def call_ollama(req: ChatCompletionRequest, model_name: str) -> Dict[str, 
 
     msg = out.get("message", {})
     return {
-        "id": "ollama-chat",
+        "id": _new_id("chatcmpl"),
         "object": "chat.completion",
+        "created": _now_unix(),
         "choices": [{"index": 0, "message": msg, "finish_reason": out.get("done_reason", "stop")}],
         "model": model_name,
+        "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
     }
+
+
+async def stream_mlx_openai_chat(payload: Dict[str, Any]) -> AsyncIterator[bytes]:
+    async with httpx.AsyncClient(timeout=None) as client:
+        try:
+            async with client.stream(
+                "POST",
+                f"{S.MLX_BASE_URL}/chat/completions",
+                json=payload,
+                headers={"accept": "text/event-stream"},
+            ) as r:
+                r.raise_for_status()
+                async for chunk in r.aiter_bytes():
+                    if chunk:
+                        yield chunk
+        except httpx.HTTPStatusError as e:
+            detail = {"upstream": "mlx", "status": e.response.status_code, "body": e.response.text[:5000]}
+            yield _sse({"error": {"message": "Upstream error", "type": "upstream_error", "param": None, "code": None, "detail": detail}})
+            yield _sse_done()
+        except httpx.RequestError as e:
+            detail = {"upstream": "mlx", "error": str(e)}
+            yield _sse({"error": {"message": "Upstream error", "type": "upstream_error", "param": None, "code": None, "detail": detail}})
+            yield _sse_done()
+
+
+async def stream_ollama_chat_as_openai(req: ChatCompletionRequest, model_name: str) -> AsyncIterator[bytes]:
+    payload: Dict[str, Any] = {
+        "model": model_name,
+        "messages": [m.model_dump(exclude_none=True) for m in req.messages],
+        "stream": True,
+    }
+    if req.tools:
+        payload["tools"] = [t.model_dump(exclude_none=True) for t in req.tools]
+    if req.temperature is not None:
+        payload.setdefault("options", {})["temperature"] = req.temperature
+
+    stream_id = _new_id("chatcmpl")
+    created = _now_unix()
+    sent_role = False
+
+    async with httpx.AsyncClient(timeout=None) as client:
+        try:
+            async with client.stream("POST", f"{S.OLLAMA_BASE_URL}/api/chat", json=payload) as r:
+                r.raise_for_status()
+                async for line in r.aiter_lines():
+                    if not line:
+                        continue
+                    try:
+                        j = json.loads(line)
+                    except Exception:
+                        continue
+
+                    msg = (j or {}).get("message") or {}
+                    delta_content = msg.get("content")
+                    if not isinstance(delta_content, str):
+                        delta_content = ""
+
+                    delta: Dict[str, Any] = {"content": delta_content}
+                    if not sent_role:
+                        delta["role"] = "assistant"
+                        sent_role = True
+
+                    chunk = {
+                        "id": stream_id,
+                        "object": "chat.completion.chunk",
+                        "created": created,
+                        "model": model_name,
+                        "choices": [{"index": 0, "delta": delta, "finish_reason": None}],
+                    }
+                    yield _sse(chunk)
+
+                    if j.get("done") is True:
+                        finish = j.get("done_reason") or "stop"
+                        final_chunk = {
+                            "id": stream_id,
+                            "object": "chat.completion.chunk",
+                            "created": created,
+                            "model": model_name,
+                            "choices": [{"index": 0, "delta": {}, "finish_reason": finish}],
+                        }
+                        yield _sse(final_chunk)
+                        break
+        except httpx.HTTPStatusError as e:
+            detail = {"upstream": "ollama", "status": e.response.status_code, "body": e.response.text[:5000]}
+            yield _sse({"error": {"message": "Upstream error", "type": "upstream_error", "param": None, "code": None, "detail": detail}})
+        except httpx.RequestError as e:
+            detail = {"upstream": "ollama", "error": str(e)}
+            yield _sse({"error": {"message": "Upstream error", "type": "upstream_error", "param": None, "code": None, "detail": detail}})
+        finally:
+            yield _sse_done()
 
 async def embed_ollama(texts: List[str], model: str) -> List[List[float]]:
     # Try modern Ollama endpoints; fall back if needed.
@@ -564,6 +686,7 @@ async def health_upstreams(req: Request):
 async def list_models(req: Request):
     require_bearer(req)
 
+    now = _now_unix()
     data = {"object": "list", "data": []}
 
     async with httpx.AsyncClient(timeout=30) as client:
@@ -592,10 +715,21 @@ async def list_models(req: Request):
             pass
 
     # Optional aliases
-    data["data"].append({"id": "ollama", "object": "model"})
-    data["data"].append({"id": "mlx", "object": "model"})
+    data["data"].append({"id": "ollama", "object": "model", "created": now, "owned_by": "gateway"})
+    data["data"].append({"id": "mlx", "object": "model", "created": now, "owned_by": "gateway"})
+
+    for m in data["data"]:
+        m.setdefault("created", now)
+        m.setdefault("owned_by", "local")
 
     return data
+
+
+@app.get("/v1/models/{model_id}")
+async def get_model(req: Request, model_id: str):
+    require_bearer(req)
+    now = _now_unix()
+    return {"id": model_id, "object": "model", "created": now, "owned_by": "local"}
 
 async def inject_memory(messages: List[ChatMessage]) -> List[ChatMessage]:
     if not S.MEMORY_ENABLED:
@@ -643,9 +777,8 @@ async def chat_completions(req: Request):
     backend = choose_backend(cc.model)
     model_name = normalize_model(cc.model, backend)
 
-    # Force non-stream for now (keep it simple and deterministic)
-    if cc.stream:
-        raise HTTPException(status_code=400, detail="stream=true not supported yet")
+    if cc.stream and cc.tools:
+        raise HTTPException(status_code=400, detail="stream=true not supported when tools are provided")
 
     # 1) Backend override via header (highest priority)
     backend_hdr = (req.headers.get("x-backend") or "").strip().lower()
@@ -681,17 +814,212 @@ async def chat_completions(req: Request):
         stream=False,
     )
 
-    # If tools are present, run gateway tool-loop; otherwise just proxy.
+    # Streaming mode
+    if cc.stream:
+        if backend == "mlx":
+            payload = cc_routed.model_dump(exclude_none=True)
+            payload["stream"] = True
+            gen = stream_mlx_openai_chat(payload)
+        else:
+            gen = stream_ollama_chat_as_openai(cc, model_name)
+
+        out = StreamingResponse(gen, media_type="text/event-stream")
+        out.headers["X-Backend-Used"] = backend
+        out.headers["X-Model-Used"] = model_name
+        return out
+
+    # Non-stream
     if cc.tools:
         resp = await tool_loop(cc, backend, model_name)
     else:
-        resp = await (call_mlx_openai(cc) if backend == "mlx" else call_ollama(cc, model_name))
+        resp = await (call_mlx_openai(cc_routed) if backend == "mlx" else call_ollama(cc, model_name))
 
-    # Optional: surface routing decision to the client
     out = JSONResponse(resp)
     out.headers["X-Backend-Used"] = backend
     out.headers["X-Model-Used"] = model_name
     return out
+
+
+@app.post("/v1/completions")
+async def completions(req: Request):
+    require_bearer(req)
+    body = await req.json()
+    cr = CompletionRequest(**body)
+
+    if isinstance(cr.prompt, str):
+        prompt_text = cr.prompt
+    elif isinstance(cr.prompt, list) and all(isinstance(x, str) for x in cr.prompt):
+        prompt_text = "\n".join(cr.prompt)
+    else:
+        raise HTTPException(status_code=400, detail="prompt must be a string or list of strings")
+
+    cc = ChatCompletionRequest(
+        model=cr.model,
+        messages=[ChatMessage(role="user", content=prompt_text)],
+        temperature=cr.temperature,
+        max_tokens=cr.max_tokens,
+        stream=bool(cr.stream),
+    )
+
+    backend = choose_backend_from_request(req, cc.model)
+    model_name = normalize_model(cc.model, backend)
+
+    if cc.stream:
+        stream_id = _new_id("cmpl")
+        created = _now_unix()
+
+        async def gen() -> AsyncIterator[bytes]:
+            if backend == "mlx":
+                payload = cc.model_dump(exclude_none=True)
+                payload["model"] = model_name
+                payload["stream"] = True
+                async for chunk in stream_mlx_openai_chat(payload):
+                    # MLX stream is chat SSE; map best-effort to text completions
+                    # If it's already SSE, we parse minimal "data:" JSON lines.
+                    for line in chunk.splitlines():
+                        if not line.startswith(b"data:"):
+                            continue
+                        data = line[len(b"data:") :].strip()
+                        if data == b"[DONE]":
+                            yield _sse_done()
+                            return
+                        try:
+                            j = json.loads(data)
+                        except Exception:
+                            continue
+                        delta = (((j or {}).get("choices") or [{}])[0].get("delta") or {})
+                        text = delta.get("content")
+                        if isinstance(text, str) and text:
+                            yield _sse({
+                                "id": stream_id,
+                                "object": "text_completion",
+                                "created": created,
+                                "model": model_name,
+                                "choices": [{"index": 0, "text": text, "finish_reason": None}],
+                            })
+                    # ignore non-data bytes
+            else:
+                async for sse_bytes in stream_ollama_chat_as_openai(cc, model_name):
+                    for line in sse_bytes.splitlines():
+                        if not line.startswith(b"data:"):
+                            continue
+                        data = line[len(b"data:") :].strip()
+                        if data == b"[DONE]":
+                            yield _sse_done()
+                            return
+                        try:
+                            j = json.loads(data)
+                        except Exception:
+                            continue
+                        delta = (((j or {}).get("choices") or [{}])[0].get("delta") or {})
+                        text = delta.get("content")
+                        if isinstance(text, str) and text:
+                            yield _sse({
+                                "id": stream_id,
+                                "object": "text_completion",
+                                "created": created,
+                                "model": model_name,
+                                "choices": [{"index": 0, "text": text, "finish_reason": None}],
+                            })
+            yield _sse({
+                "id": stream_id,
+                "object": "text_completion",
+                "created": created,
+                "model": model_name,
+                "choices": [{"index": 0, "text": "", "finish_reason": "stop"}],
+            })
+            yield _sse_done()
+
+        out = StreamingResponse(gen(), media_type="text/event-stream")
+        out.headers["X-Backend-Used"] = backend
+        out.headers["X-Model-Used"] = model_name
+        return out
+
+    # Non-stream completion
+    if backend == "mlx":
+        cc_routed = ChatCompletionRequest(
+            model=model_name,
+            messages=cc.messages,
+            temperature=cc.temperature,
+            max_tokens=cc.max_tokens,
+            stream=False,
+        )
+        chat_resp = await call_mlx_openai(cc_routed)
+    else:
+        chat_resp = await call_ollama(cc, model_name)
+
+    msg = ((chat_resp.get("choices") or [{}])[0].get("message") or {})
+    text = msg.get("content")
+    if not isinstance(text, str):
+        text = ""
+    resp = {
+        "id": _new_id("cmpl"),
+        "object": "text_completion",
+        "created": _now_unix(),
+        "model": model_name,
+        "choices": [{"index": 0, "text": text, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+    }
+    out = JSONResponse(resp)
+    out.headers["X-Backend-Used"] = backend
+    out.headers["X-Model-Used"] = model_name
+    return out
+
+
+@app.post("/v1/rerank")
+async def rerank(req: Request):
+    require_bearer(req)
+    body = await req.json()
+    rr = RerankRequest(**body)
+
+    if not rr.query.strip():
+        raise HTTPException(status_code=400, detail="query must be non-empty")
+    if not rr.documents:
+        raise HTTPException(status_code=400, detail="documents must be non-empty")
+    if any((not isinstance(d, str) or not d) for d in rr.documents):
+        raise HTTPException(status_code=400, detail="documents must be a list of non-empty strings")
+
+    top_n = rr.top_n if isinstance(rr.top_n, int) and rr.top_n > 0 else len(rr.documents)
+    top_n = min(top_n, len(rr.documents))
+
+    backend = S.EMBEDDINGS_BACKEND
+    model_used = rr.model or S.EMBEDDINGS_MODEL
+
+    try:
+        if backend == "ollama":
+            q_emb = (await embed_ollama([rr.query], model_used))[0]
+            doc_embs = await embed_ollama(rr.documents, model_used)
+        else:
+            q_emb = (await embed_mlx([rr.query], model_used))[0]
+            doc_embs = await embed_mlx(rr.documents, model_used)
+    except httpx.HTTPStatusError as e:
+        detail = {"upstream": backend, "status": e.response.status_code, "body": e.response.text[:5000]}
+        logger.warning("/v1/rerank upstream HTTP error: %s", detail)
+        raise HTTPException(status_code=502, detail=detail)
+    except httpx.RequestError as e:
+        detail = {"upstream": backend, "error": str(e)}
+        logger.warning("/v1/rerank upstream request error: %s", detail)
+        raise HTTPException(status_code=502, detail=detail)
+
+    scored = []
+    for i, emb in enumerate(doc_embs):
+        s = cosine(q_emb, emb)
+        scored.append((s, i))
+    scored.sort(key=lambda x: x[0], reverse=True)
+
+    data = []
+    for rank, (score, i) in enumerate(scored[:top_n]):
+        data.append({
+            "index": i,
+            "relevance_score": float(score),
+            "document": rr.documents[i],
+        })
+
+    return {
+        "object": "list",
+        "data": data,
+        "model": model_used,
+    }
 
 @app.post("/v1/embeddings")
 async def embeddings(req: Request):
