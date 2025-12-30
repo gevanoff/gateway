@@ -167,6 +167,7 @@ async def stream_ollama_chat_as_openai(req: ChatCompletionRequest, model_name: s
         payload.setdefault("options", {})["temperature"] = req.temperature
 
     done_sent = False
+    finish_sent = False
 
     async with httpx.AsyncClient(timeout=None) as client:
         try:
@@ -183,6 +184,10 @@ async def stream_ollama_chat_as_openai(req: ChatCompletionRequest, model_name: s
                 ):
                     if chunk == sse_done():
                         done_sent = True
+                    # The OpenAI Python SDK expects at least one chunk with a non-null
+                    # finish_reason before the stream ends.
+                    if b'"finish_reason":"' in chunk:
+                        finish_sent = True
                     yield chunk
         except httpx.HTTPStatusError as e:
             detail = {"upstream": "ollama", "status": e.response.status_code, "body": e.response.text[:5000]}
@@ -194,6 +199,17 @@ async def stream_ollama_chat_as_openai(req: ChatCompletionRequest, model_name: s
             logger.exception("Unexpected error in Ollama streaming")
             detail = {"upstream": "ollama", "error": str(e)}
             yield sse({"error": {"message": "Gateway streaming error", "type": "internal_error", "param": None, "code": None, "detail": detail}})
+
+        if not finish_sent:
+            yield sse(
+                {
+                    "id": chunk_id,
+                    "object": "chat.completion.chunk",
+                    "created": created,
+                    "model": model_id,
+                    "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                }
+            )
 
         if not done_sent:
             yield sse_done()
