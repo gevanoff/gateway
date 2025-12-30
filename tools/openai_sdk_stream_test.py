@@ -61,6 +61,7 @@ def main(argv: List[str]) -> int:
     p.add_argument("--model", default=os.getenv("GATEWAY_MODEL", "fast"))
     p.add_argument("--prompt", default="Count from 1 to 5, slowly.")
     p.add_argument("--max-chunks", type=int, default=10_000)
+    p.add_argument("--debug-http", action="store_true", help="If set, also print raw HTTP/SSE details.")
     ns = p.parse_args(argv)
 
     if not ns.api_key:
@@ -100,6 +101,12 @@ def main(argv: List[str]) -> int:
     finish_reason: Optional[str] = None
 
     try:
+        # Be explicit about accepting SSE.
+        try:
+            client = OpenAI(base_url=ns.base_url, api_key=ns.api_key, default_headers={"accept": "text/event-stream"})
+        except Exception:
+            client = OpenAI(base_url=ns.base_url, api_key=ns.api_key)
+
         stream = client.chat.completions.create(
             model=ns.model,
             stream=True,
@@ -138,6 +145,52 @@ def main(argv: List[str]) -> int:
 
     if chunks == 0:
         print("ERROR: received 0 streamed events.", file=sys.stderr)
+
+        # This usually means either:
+        # - the server only sent the terminal [DONE] marker (no JSON chunks)
+        # - the server did not stream at all / returned a non-SSE response
+        # Dump some raw HTTP details to make this obvious.
+        try:
+            import httpx
+
+            url = ns.base_url.rstrip("/") + "/chat/completions"
+            headers = {"authorization": f"Bearer {ns.api_key}", "accept": "text/event-stream", "content-type": "application/json"}
+            payload = {"model": ns.model, "stream": True, "messages": [{"role": "user", "content": ns.prompt}]}
+
+            print("---- raw http debug ----", file=sys.stderr)
+            print(f"POST {url}", file=sys.stderr)
+            with httpx.Client(timeout=30.0, http2=False) as hc:
+                with hc.stream("POST", url, headers=headers, json=payload) as r:
+                    print(f"status={r.status_code}", file=sys.stderr)
+                    ct = r.headers.get("content-type", "")
+                    print(f"content-type={ct}", file=sys.stderr)
+                    for hk in ["x-backend-used", "x-model-used", "x-router-reason"]:
+                        if hk in r.headers:
+                            print(f"{hk}={r.headers.get(hk)}", file=sys.stderr)
+
+                    buf = bytearray()
+                    for chunk in r.iter_bytes():
+                        if not chunk:
+                            continue
+                        buf.extend(chunk)
+                        if len(buf) >= 2048:
+                            break
+                    preview = bytes(buf)
+                    if preview:
+                        print("first_bytes=", file=sys.stderr)
+                        try:
+                            print(preview.decode("utf-8", errors="replace"), file=sys.stderr)
+                        except Exception:
+                            print(repr(preview[:200]), file=sys.stderr)
+                    else:
+                        print("first_bytes=(none)", file=sys.stderr)
+        except Exception as e:
+            print(f"raw debug failed: {type(e).__name__}: {e}", file=sys.stderr)
+
+        print(
+            "Hint: try an explicit Ollama model like --model ollama:qwen3:30b (or an alias mapped to Ollama, e.g. --model coder).",
+            file=sys.stderr,
+        )
         return 6
 
     if not finish_reason:
