@@ -72,27 +72,45 @@ def _raw_sse_debug(base_url: str, api_key: str, model: str, prompt: str) -> None
                         print(f"{hk}={r.headers.get(hk)}", file=sys.stderr)
 
                 buf = bytearray()
+                tail = bytearray()
                 saw_done = False
                 saw_finish_reason = False
+                saw_content_field = False
+                data_frames = 0
 
-                # Read a bounded amount; enough to see ordering.
+                # Read a bounded amount; enough to see ordering and whether any content was streamed.
                 for chunk in r.iter_bytes():
                     if not chunk:
                         continue
                     buf.extend(chunk)
+                    tail.extend(chunk)
+                    if len(tail) > 4096:
+                        tail = tail[-4096:]
+
+                    # Heuristic counters (good enough for diagnostics).
+                    data_frames += chunk.count(b"\ndata:") + (1 if chunk.startswith(b"data:") else 0)
                     if b"data: [DONE]" in buf:
                         saw_done = True
                     if b"\"finish_reason\":" in buf:
                         saw_finish_reason = True
-                    if len(buf) >= 16_384 or (saw_done and saw_finish_reason):
+                    if b"\"content\":" in buf:
+                        saw_content_field = True
+
+                    if saw_done:
+                        break
+                    if len(buf) >= 65_536:
                         break
 
                 preview = bytes(buf)
+                print(f"data_frames_estimate={data_frames}", file=sys.stderr)
                 print(f"saw_done={saw_done}", file=sys.stderr)
                 print(f"saw_finish_reason_field={saw_finish_reason}", file=sys.stderr)
+                print(f"saw_content_field={saw_content_field}", file=sys.stderr)
                 if preview:
                     print("first_bytes=", file=sys.stderr)
                     print(preview[:4096].decode("utf-8", errors="replace"), file=sys.stderr)
+                    print("last_bytes=", file=sys.stderr)
+                    print(bytes(tail).decode("utf-8", errors="replace"), file=sys.stderr)
                 else:
                     print("first_bytes=(none)", file=sys.stderr)
     except Exception as e:
@@ -210,6 +228,11 @@ def main(argv: List[str]) -> int:
         if ns.debug_http:
             _raw_sse_debug(ns.base_url, ns.api_key, ns.model, ns.prompt)
         return 7
+
+    if ns.debug_http:
+        # Run a second request using raw httpx streaming to show exactly what bytes
+        # the gateway emitted (useful when the SDK reports OK but there is no content).
+        _raw_sse_debug(ns.base_url, ns.api_key, ns.model, ns.prompt)
 
     print(f"OK: streamed {chunks} events; finish_reason={finish_reason}")
     return 0
