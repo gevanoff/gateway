@@ -75,6 +75,34 @@ async def ollama_ndjson_to_openai_sse(
             except Exception:
                 continue
 
+            # Ollama may return a non-NDJSON JSON error payload even when called with
+            # stream=true. Surface this as an OpenAI-style error event.
+            err = obj.get("error") if isinstance(obj, dict) else None
+            if isinstance(err, str) and err:
+                logger.warning("ollama stream error model=%s error=%r", model_name, err)
+                yield sse(
+                    {
+                        "error": {
+                            "message": err,
+                            "type": "upstream_error",
+                            "param": None,
+                            "code": None,
+                            "detail": {"upstream": "ollama", "model": model_name},
+                        }
+                    }
+                )
+                yield sse(
+                    {
+                        "id": chunk_id,
+                        "object": "chat.completion.chunk",
+                        "created": created,
+                        "model": model_name,
+                        "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                    }
+                )
+                yield sse_done()
+                return
+
         # Ollama /api/chat uses "message": {"role":"assistant","content":"..."} and "done"
         # /api/generate uses "response": "..." and "done" :contentReference[oaicite:3]{index=3}
             done = bool(obj.get("done", False))

@@ -45,6 +45,8 @@ async def call_ollama(req: ChatCompletionRequest, model_name: str) -> Dict[str, 
             r = await client.post(f"{S.OLLAMA_BASE_URL}/api/chat", json=payload)
             r.raise_for_status()
             out = r.json()
+            if isinstance(out, dict) and isinstance(out.get("error"), str) and out.get("error"):
+                raise HTTPException(status_code=502, detail={"upstream": "ollama", "error": out.get("error")})
         except httpx.HTTPStatusError as e:
             detail = {"upstream": "ollama", "status": e.response.status_code, "body": e.response.text[:5000]}
             raise HTTPException(status_code=502, detail=detail)
