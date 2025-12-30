@@ -52,6 +52,53 @@ def _env_first(*keys: str) -> Optional[str]:
     return None
 
 
+def _raw_sse_debug(base_url: str, api_key: str, model: str, prompt: str) -> None:
+    try:
+        import httpx
+
+        url = base_url.rstrip("/") + "/chat/completions"
+        headers = {"authorization": f"Bearer {api_key}", "accept": "text/event-stream", "content-type": "application/json"}
+        payload = {"model": model, "stream": True, "messages": [{"role": "user", "content": prompt}]}
+
+        print("---- raw http debug ----", file=sys.stderr)
+        print(f"POST {url}", file=sys.stderr)
+        with httpx.Client(timeout=30.0, http2=False) as hc:
+            with hc.stream("POST", url, headers=headers, json=payload) as r:
+                print(f"status={r.status_code}", file=sys.stderr)
+                ct = r.headers.get("content-type", "")
+                print(f"content-type={ct}", file=sys.stderr)
+                for hk in ["x-backend-used", "x-model-used", "x-router-reason"]:
+                    if hk in r.headers:
+                        print(f"{hk}={r.headers.get(hk)}", file=sys.stderr)
+
+                buf = bytearray()
+                saw_done = False
+                saw_finish_reason = False
+
+                # Read a bounded amount; enough to see ordering.
+                for chunk in r.iter_bytes():
+                    if not chunk:
+                        continue
+                    buf.extend(chunk)
+                    if b"data: [DONE]" in buf:
+                        saw_done = True
+                    if b"\"finish_reason\":" in buf:
+                        saw_finish_reason = True
+                    if len(buf) >= 16_384 or (saw_done and saw_finish_reason):
+                        break
+
+                preview = bytes(buf)
+                print(f"saw_done={saw_done}", file=sys.stderr)
+                print(f"saw_finish_reason_field={saw_finish_reason}", file=sys.stderr)
+                if preview:
+                    print("first_bytes=", file=sys.stderr)
+                    print(preview[:4096].decode("utf-8", errors="replace"), file=sys.stderr)
+                else:
+                    print("first_bytes=(none)", file=sys.stderr)
+    except Exception as e:
+        print(f"raw debug failed: {type(e).__name__}: {e}", file=sys.stderr)
+
+
 def main(argv: List[str]) -> int:
     _maybe_reexec_into_gateway_venv()
 
@@ -150,42 +197,7 @@ def main(argv: List[str]) -> int:
         # - the server only sent the terminal [DONE] marker (no JSON chunks)
         # - the server did not stream at all / returned a non-SSE response
         # Dump some raw HTTP details to make this obvious.
-        try:
-            import httpx
-
-            url = ns.base_url.rstrip("/") + "/chat/completions"
-            headers = {"authorization": f"Bearer {ns.api_key}", "accept": "text/event-stream", "content-type": "application/json"}
-            payload = {"model": ns.model, "stream": True, "messages": [{"role": "user", "content": ns.prompt}]}
-
-            print("---- raw http debug ----", file=sys.stderr)
-            print(f"POST {url}", file=sys.stderr)
-            with httpx.Client(timeout=30.0, http2=False) as hc:
-                with hc.stream("POST", url, headers=headers, json=payload) as r:
-                    print(f"status={r.status_code}", file=sys.stderr)
-                    ct = r.headers.get("content-type", "")
-                    print(f"content-type={ct}", file=sys.stderr)
-                    for hk in ["x-backend-used", "x-model-used", "x-router-reason"]:
-                        if hk in r.headers:
-                            print(f"{hk}={r.headers.get(hk)}", file=sys.stderr)
-
-                    buf = bytearray()
-                    for chunk in r.iter_bytes():
-                        if not chunk:
-                            continue
-                        buf.extend(chunk)
-                        if len(buf) >= 2048:
-                            break
-                    preview = bytes(buf)
-                    if preview:
-                        print("first_bytes=", file=sys.stderr)
-                        try:
-                            print(preview.decode("utf-8", errors="replace"), file=sys.stderr)
-                        except Exception:
-                            print(repr(preview[:200]), file=sys.stderr)
-                    else:
-                        print("first_bytes=(none)", file=sys.stderr)
-        except Exception as e:
-            print(f"raw debug failed: {type(e).__name__}: {e}", file=sys.stderr)
+        _raw_sse_debug(ns.base_url, ns.api_key, ns.model, ns.prompt)
 
         print(
             "Hint: try an explicit Ollama model like --model ollama:qwen3:30b (or an alias mapped to Ollama, e.g. --model coder).",
@@ -195,6 +207,8 @@ def main(argv: List[str]) -> int:
 
     if not finish_reason:
         print("ERROR: stream ended without a finish_reason.", file=sys.stderr)
+        if ns.debug_http:
+            _raw_sse_debug(ns.base_url, ns.api_key, ns.model, ns.prompt)
         return 7
 
     print(f"OK: streamed {chunks} events; finish_reason={finish_reason}")
