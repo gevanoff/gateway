@@ -166,7 +166,7 @@ async def stream_ollama_chat_as_openai(req: ChatCompletionRequest, model_name: s
     if req.temperature is not None:
         payload.setdefault("options", {})["temperature"] = req.temperature
 
-    done_sent = False
+    done_seen = False
     finish_sent = False
 
     async with httpx.AsyncClient(timeout=None) as client:
@@ -182,8 +182,11 @@ async def stream_ollama_chat_as_openai(req: ChatCompletionRequest, model_name: s
                     created=created,
                     emit_role_chunk=False,
                 ):
+                    # Never forward upstream [DONE] directly; we emit exactly one [DONE]
+                    # at the end so it cannot appear before a finish_reason chunk.
                     if chunk == sse_done():
-                        done_sent = True
+                        done_seen = True
+                        break
                     # The OpenAI Python SDK expects at least one chunk with a non-null
                     # finish_reason before the stream ends.
                     if b'"finish_reason":"' in chunk:
@@ -211,5 +214,6 @@ async def stream_ollama_chat_as_openai(req: ChatCompletionRequest, model_name: s
                 }
             )
 
-        if not done_sent:
-            yield sse_done()
+        # Always emit the terminal marker once, after finish.
+        # (done_seen is tracked only for debugging/diagnostics.)
+        yield sse_done()
