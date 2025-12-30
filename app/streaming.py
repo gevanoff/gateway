@@ -6,6 +6,7 @@ from typing import Any, AsyncIterator, Dict
 
 import httpx
 
+from app.config import logger
 from app.openai_utils import new_id, now_unix, sse, sse_done
 
 
@@ -50,6 +51,7 @@ async def ollama_ndjson_to_openai_sse(
     created = created or now_unix()
 
     sent_role = not emit_role_chunk
+    content_emitted = False
     if emit_role_chunk:
         # First chunk: announce assistant role (common expectation)
         yield sse(
@@ -88,6 +90,7 @@ async def ollama_ndjson_to_openai_sse(
                 content = obj.get("response")
 
             if content:
+                content_emitted = True
                 delta: Dict[str, Any] = {"content": content}
                 if not sent_role:
                     delta["role"] = "assistant"
@@ -104,6 +107,14 @@ async def ollama_ndjson_to_openai_sse(
 
             if done:
                 finish_reason = obj.get("done_reason") or "stop"
+                if not content_emitted:
+                    # Useful for diagnosing alias models that immediately end without output.
+                    logger.warning(
+                        "ollama stream ended with no content model=%s done_reason=%r keys=%s",
+                        model_name,
+                        obj.get("done_reason"),
+                        sorted(list(obj.keys())),
+                    )
                 yield sse(
                     {
                         "id": chunk_id,
