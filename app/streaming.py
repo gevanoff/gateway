@@ -39,24 +39,29 @@ async def ollama_ndjson_to_openai_sse(
     resp: httpx.Response,
     *,
     model_name: str,
+    chunk_id: str | None = None,
+    created: int | None = None,
+    emit_role_chunk: bool = True,
 ) -> AsyncIterator[bytes]:
     """
     Translate Ollama NDJSON streaming into OpenAI SSE chat.completion.chunk events.
     """
-    chunk_id = new_id("chatcmpl")
-    created = now_unix()
-    sent_role = True
+    chunk_id = chunk_id or new_id("chatcmpl")
+    created = created or now_unix()
 
-    # First chunk: announce assistant role (common expectation)
-    yield sse(
-        {
-            "id": chunk_id,
-            "object": "chat.completion.chunk",
-            "created": created,
-            "model": model_name,
-            "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}],
-        }
-    )
+    sent_role = not emit_role_chunk
+    if emit_role_chunk:
+        # First chunk: announce assistant role (common expectation)
+        yield sse(
+            {
+                "id": chunk_id,
+                "object": "chat.completion.chunk",
+                "created": created,
+                "model": model_name,
+                "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}],
+            }
+        )
+        sent_role = True
 
     try:
         async for line in resp.aiter_lines():

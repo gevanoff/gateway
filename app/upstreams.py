@@ -140,6 +140,22 @@ async def stream_mlx_openai_chat(payload: Dict[str, Any]) -> AsyncIterator[bytes
 
 
 async def stream_ollama_chat_as_openai(req: ChatCompletionRequest, model_name: str) -> AsyncIterator[bytes]:
+    chunk_id = new_id("chatcmpl")
+    created = now_unix()
+    model_id = f"ollama:{model_name}"
+
+    # Emit an initial chunk immediately so SSE clients (incl OpenAI SDK) always
+    # see at least one event even if the upstream stream errors or yields no bytes.
+    yield sse(
+        {
+            "id": chunk_id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": model_id,
+            "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}],
+        }
+    )
+
     payload: Dict[str, Any] = {
         "model": model_name,
         "messages": [m.model_dump(exclude_none=True) for m in req.messages],
@@ -158,7 +174,13 @@ async def stream_ollama_chat_as_openai(req: ChatCompletionRequest, model_name: s
                 r.raise_for_status()
                 # For OpenAI-compatible responses, keep the backend prefix so clients can
                 # correlate streamed chunks with /v1/models IDs.
-                async for chunk in ollama_ndjson_to_openai_sse(r, model_name=f"ollama:{model_name}"):
+                async for chunk in ollama_ndjson_to_openai_sse(
+                    r,
+                    model_name=model_id,
+                    chunk_id=chunk_id,
+                    created=created,
+                    emit_role_chunk=False,
+                ):
                     if chunk == sse_done():
                         done_sent = True
                     yield chunk
@@ -168,6 +190,10 @@ async def stream_ollama_chat_as_openai(req: ChatCompletionRequest, model_name: s
         except httpx.RequestError as e:
             detail = {"upstream": "ollama", "error": str(e)}
             yield sse({"error": {"message": "Upstream error", "type": "upstream_error", "param": None, "code": None, "detail": detail}})
+        except Exception as e:
+            logger.exception("Unexpected error in Ollama streaming")
+            detail = {"upstream": "ollama", "error": str(e)}
+            yield sse({"error": {"message": "Gateway streaming error", "type": "internal_error", "param": None, "code": None, "detail": detail}})
 
         if not done_sent:
             yield sse_done()
