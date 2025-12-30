@@ -8,6 +8,30 @@ import sys
 from typing import Any, List, Optional
 
 
+def _maybe_reexec_into_gateway_venv() -> None:
+    """If the gateway venv exists, ensure we run under it.
+
+    On the macOS host, this script is typically executed as `tools/openai_sdk_stream_test.py`,
+    which uses the system python from the shebang. The gateway runtime, however, uses
+    /var/lib/gateway/env/bin/python. Re-exec into that interpreter if present so
+    optional deps (like `openai`) are resolved from the correct environment.
+    """
+
+    if os.getenv("GATEWAY_SKIP_REEXEC") == "1":
+        return
+
+    venv_py = "/var/lib/gateway/env/bin/python"
+    try:
+        if os.path.exists(venv_py) and os.path.realpath(sys.executable) != os.path.realpath(venv_py):
+            env = dict(os.environ)
+            env["GATEWAY_SKIP_REEXEC"] = "1"
+            os.execve(venv_py, [venv_py, *sys.argv], env)
+    except Exception:
+        # Fall back to current interpreter; the error message below will
+        # explain how to install deps / run with the venv python.
+        return
+
+
 def _env_first(*keys: str) -> Optional[str]:
     for k in keys:
         v = (os.getenv(k) or "").strip()
@@ -17,6 +41,8 @@ def _env_first(*keys: str) -> Optional[str]:
 
 
 def main(argv: List[str]) -> int:
+    _maybe_reexec_into_gateway_venv()
+
     p = argparse.ArgumentParser(description="Validate gateway SSE streaming via the OpenAI Python SDK.")
     p.add_argument("--base-url", default=_env_first("GATEWAY_OPENAI_BASE_URL", "OPENAI_BASE_URL") or "http://127.0.0.1:8800/v1")
     p.add_argument("--api-key", default=_env_first("GATEWAY_BEARER_TOKEN", "OPENAI_API_KEY") or "")
@@ -34,7 +60,13 @@ def main(argv: List[str]) -> int:
         from openai import OpenAI  # type: ignore
     except Exception as e:
         print("ERROR: openai Python package not installed in this environment.", file=sys.stderr)
-        print("Install with: pip install openai", file=sys.stderr)
+        if os.path.exists("/var/lib/gateway/env/bin/python"):
+            print(
+                "Install with: sudo -u gateway /var/lib/gateway/env/bin/python -m pip install -r /var/lib/gateway/app/tools/requirements.txt",
+                file=sys.stderr,
+            )
+        else:
+            print("Install with: pip install openai", file=sys.stderr)
         print(f"Import error: {type(e).__name__}: {e}", file=sys.stderr)
         return 3
 
