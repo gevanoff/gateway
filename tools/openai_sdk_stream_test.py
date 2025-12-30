@@ -20,12 +20,24 @@ def _maybe_reexec_into_gateway_venv() -> None:
     if os.getenv("GATEWAY_SKIP_REEXEC") == "1":
         return
 
-    venv_py = "/var/lib/gateway/env/bin/python"
+    candidates = []
+    override = (os.getenv("GATEWAY_VENV_PY") or "").strip()
+    if override:
+        candidates.append(override)
+    # Default paths used by ai-infra scripts
+    candidates.extend(
+        [
+            "/var/lib/gateway/env/bin/python",
+            "/var/lib/gateway/venv/bin/python",
+        ]
+    )
+
     try:
-        if os.path.exists(venv_py) and os.path.realpath(sys.executable) != os.path.realpath(venv_py):
-            env = dict(os.environ)
-            env["GATEWAY_SKIP_REEXEC"] = "1"
-            os.execve(venv_py, [venv_py, *sys.argv], env)
+        for venv_py in candidates:
+            if os.path.exists(venv_py) and os.path.realpath(sys.executable) != os.path.realpath(venv_py):
+                env = dict(os.environ)
+                env["GATEWAY_SKIP_REEXEC"] = "1"
+                os.execve(venv_py, [venv_py, *sys.argv], env)
     except Exception:
         # Fall back to current interpreter; the error message below will
         # explain how to install deps / run with the venv python.
@@ -65,8 +77,16 @@ def main(argv: List[str]) -> int:
                 "Install with: sudo -u gateway /var/lib/gateway/env/bin/python -m pip install -r /var/lib/gateway/app/tools/requirements.txt",
                 file=sys.stderr,
             )
+            print(
+                "If /var/lib/gateway/env does not exist yet, run: sudo ai-infra/services/gateway/scripts/install.sh",
+                file=sys.stderr,
+            )
         else:
-            print("Install with: pip install openai", file=sys.stderr)
+            print(
+                "Install with (preferred): sudo -u gateway /var/lib/gateway/env/bin/python -m pip install -r /var/lib/gateway/app/tools/requirements.txt",
+                file=sys.stderr,
+            )
+            print("Or (current python): python3 -m pip install openai", file=sys.stderr)
         print(f"Import error: {type(e).__name__}: {e}", file=sys.stderr)
         return 3
 
