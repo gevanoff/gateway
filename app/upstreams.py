@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any, AsyncIterator, Dict, List, Literal
 
@@ -144,6 +145,8 @@ async def stream_ollama_chat_as_openai(req: ChatCompletionRequest, model_name: s
     created = now_unix()
     model_id = f"ollama:{model_name}"
 
+    finish_sent = False
+
     # Emit an initial chunk immediately so SSE clients (incl OpenAI SDK) always
     # see at least one event even if the upstream stream errors or yields no bytes.
     yield sse(
@@ -156,21 +159,18 @@ async def stream_ollama_chat_as_openai(req: ChatCompletionRequest, model_name: s
         }
     )
 
-    payload: Dict[str, Any] = {
-        "model": model_name,
-        "messages": [m.model_dump(exclude_none=True) for m in req.messages],
-        "stream": True,
-    }
-    if req.tools:
-        payload["tools"] = [t.model_dump(exclude_none=True) for t in req.tools]
-    if req.temperature is not None:
-        payload.setdefault("options", {})["temperature"] = req.temperature
+    try:
+        payload: Dict[str, Any] = {
+            "model": model_name,
+            "messages": [m.model_dump(exclude_none=True) for m in req.messages],
+            "stream": True,
+        }
+        if req.tools:
+            payload["tools"] = [t.model_dump(exclude_none=True) for t in req.tools]
+        if req.temperature is not None:
+            payload.setdefault("options", {})["temperature"] = req.temperature
 
-    done_seen = False
-    finish_sent = False
-
-    async with httpx.AsyncClient(timeout=None) as client:
-        try:
+        async with httpx.AsyncClient(timeout=None) as client:
             async with client.stream("POST", f"{S.OLLAMA_BASE_URL}/api/chat", json=payload) as r:
                 r.raise_for_status()
                 # For OpenAI-compatible responses, keep the backend prefix so clients can
@@ -185,24 +185,26 @@ async def stream_ollama_chat_as_openai(req: ChatCompletionRequest, model_name: s
                     # Never forward upstream [DONE] directly; we emit exactly one [DONE]
                     # at the end so it cannot appear before a finish_reason chunk.
                     if chunk == sse_done():
-                        done_seen = True
                         break
-                    # The OpenAI Python SDK expects at least one chunk with a non-null
-                    # finish_reason before the stream ends.
+                    # Best-effort: if we see a non-null finish_reason emitted by the translator,
+                    # treat the stream as having a finish marker.
                     if b'"finish_reason":"' in chunk:
                         finish_sent = True
                     yield chunk
-        except httpx.HTTPStatusError as e:
-            detail = {"upstream": "ollama", "status": e.response.status_code, "body": e.response.text[:5000]}
-            yield sse({"error": {"message": "Upstream error", "type": "upstream_error", "param": None, "code": None, "detail": detail}})
-        except httpx.RequestError as e:
-            detail = {"upstream": "ollama", "error": str(e)}
-            yield sse({"error": {"message": "Upstream error", "type": "upstream_error", "param": None, "code": None, "detail": detail}})
-        except Exception as e:
-            logger.exception("Unexpected error in Ollama streaming")
-            detail = {"upstream": "ollama", "error": str(e)}
-            yield sse({"error": {"message": "Gateway streaming error", "type": "internal_error", "param": None, "code": None, "detail": detail}})
 
+    except asyncio.CancelledError:
+        raise
+    except httpx.HTTPStatusError as e:
+        detail = {"upstream": "ollama", "status": e.response.status_code, "body": e.response.text[:5000]}
+        yield sse({"error": {"message": "Upstream error", "type": "upstream_error", "param": None, "code": None, "detail": detail}})
+    except httpx.RequestError as e:
+        detail = {"upstream": "ollama", "error": str(e)}
+        yield sse({"error": {"message": "Upstream error", "type": "upstream_error", "param": None, "code": None, "detail": detail}})
+    except Exception as e:
+        logger.exception("Unexpected error in Ollama streaming")
+        detail = {"upstream": "ollama", "error": str(e)}
+        yield sse({"error": {"message": "Gateway streaming error", "type": "internal_error", "param": None, "code": None, "detail": detail}})
+    finally:
         if not finish_sent:
             yield sse(
                 {
@@ -213,7 +215,6 @@ async def stream_ollama_chat_as_openai(req: ChatCompletionRequest, model_name: s
                     "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
                 }
             )
+            finish_sent = True
 
-        # Always emit the terminal marker once, after finish.
-        # (done_seen is tracked only for debugging/diagnostics.)
         yield sse_done()
