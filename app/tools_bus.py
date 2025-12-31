@@ -5,6 +5,7 @@ import json
 import os
 import shlex
 import subprocess
+import time
 from typing import Any, Dict
 from pathlib import Path
 from urllib.parse import urlparse
@@ -15,9 +16,98 @@ from fastapi import APIRouter, HTTPException, Request
 from app.auth import require_bearer
 from app.config import S
 from app.models import ToolExecRequest
+from app.openai_utils import new_id, now_unix
 
 
 router = APIRouter()
+
+
+def _tools_log_path() -> str:
+    # Configurable via env; default stays within /var/lib/gateway.
+    return (getattr(S, "TOOLS_LOG_PATH", "") or "/var/lib/gateway/data/tools_bus.jsonl").strip()
+
+
+def _truncate(s: Any, *, max_chars: int) -> Any:
+    if isinstance(s, str) and len(s) > max_chars:
+        return s[:max_chars] + "…"
+    return s
+
+
+def _safe_json(obj: Any, *, max_chars: int = 20_000) -> str:
+    try:
+        return _truncate(json.dumps(obj, separators=(",", ":"), sort_keys=True), max_chars=max_chars)  # type: ignore[return-value]
+    except Exception:
+        return "{}"
+
+
+def _log_tool_event(event: Dict[str, Any]) -> None:
+    path = _tools_log_path()
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        line = json.dumps(event, separators=(",", ":"), sort_keys=True)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except Exception:
+        # Tool execution should not fail just because logging failed.
+        return
+
+
+def _validate_against_schema(params_schema: Dict[str, Any], args: Any) -> list[str]:
+    """Minimal validation for our tool parameter schemas.
+
+    Supports:
+    - object schemas with properties/required/additionalProperties
+    - string
+    - array of strings
+    """
+
+    errs: list[str] = []
+    if not isinstance(args, dict):
+        return ["arguments must be a JSON object"]
+
+    if (params_schema.get("type") or "") != "object":
+        return []
+
+    props = params_schema.get("properties")
+    if not isinstance(props, dict):
+        props = {}
+
+    required = params_schema.get("required")
+    if isinstance(required, list):
+        for k in required:
+            if isinstance(k, str) and k not in args:
+                errs.append(f"missing required field: {k}")
+
+    additional = params_schema.get("additionalProperties")
+    if additional is False:
+        allowed = set(k for k in props.keys() if isinstance(k, str))
+        extra = sorted([k for k in args.keys() if k not in allowed])
+        for k in extra:
+            errs.append(f"unexpected field: {k}")
+
+    for key, sch in props.items():
+        if not isinstance(key, str) or key not in args:
+            continue
+        v = args.get(key)
+        if not isinstance(sch, dict):
+            continue
+        t = sch.get("type")
+        if t == "string":
+            if not isinstance(v, str):
+                errs.append(f"{key} must be a string")
+        elif t == "array":
+            items = sch.get("items")
+            if not isinstance(v, list):
+                errs.append(f"{key} must be an array")
+            else:
+                if isinstance(items, dict) and items.get("type") == "string":
+                    if not all(isinstance(x, str) for x in v):
+                        errs.append(f"{key} items must be strings")
+        elif t == "object":
+            if not isinstance(v, dict):
+                errs.append(f"{key} must be an object")
+
+    return errs
 
 
 def tool_shell(args: Dict[str, Any]) -> Dict[str, Any]:
@@ -353,6 +443,49 @@ def run_tool_call(name: str, arguments_json: str) -> Dict[str, Any]:
     return fn(args)
 
 
+def _execute_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
+    """Execute a tool with validation + replay ID + deterministic logging."""
+
+    if name not in TOOL_IMPL:
+        raise HTTPException(status_code=404, detail=f"unknown tool: {name}")
+    if not is_tool_allowed(name):
+        raise HTTPException(status_code=403, detail=f"tool not allowed: {name}")
+
+    sch = TOOL_SCHEMAS.get(name)
+    if sch and isinstance(sch.get("parameters"), dict):
+        errs = _validate_against_schema(sch["parameters"], args)
+        if errs:
+            raise HTTPException(status_code=400, detail={"error": "invalid tool arguments", "issues": errs})
+
+    replay_id = new_id("tool")
+    ts = now_unix()
+    t0 = time.monotonic()
+
+    out: Dict[str, Any]
+    try:
+        out = TOOL_IMPL[name](args)
+    except Exception as e:
+        out = {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+    dur_ms = (time.monotonic() - t0) * 1000.0
+
+    event = {
+        "ts": ts,
+        "replay_id": replay_id,
+        "tool": name,
+        "ok": bool(out.get("ok")) if isinstance(out, dict) else False,
+        "duration_ms": round(dur_ms, 1),
+        "args": _truncate(args, max_chars=10_000),
+        "result": _truncate(out, max_chars=20_000),
+    }
+    _log_tool_event(event)
+
+    # Backward-compatible response shape, with replay_id attached.
+    if isinstance(out, dict):
+        return {"replay_id": replay_id, **out}
+    return {"replay_id": replay_id, "ok": False, "error": "invalid tool result"}
+
+
 @router.get("/v1/tools")
 async def v1_tools_list(req: Request):
     require_bearer(req)
@@ -367,13 +500,32 @@ async def v1_tools_list(req: Request):
     return {"object": "list", "data": data}
 
 
+@router.post("/v1/tools")
+async def v1_tools_dispatch(req: Request):
+    """Dispatcher endpoint.
+
+    Body:
+      {"name": "read_file", "arguments": {...}}
+    """
+
+    require_bearer(req)
+    body = await req.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="body must be an object")
+    name = body.get("name")
+    if not isinstance(name, str) or not name.strip():
+        raise HTTPException(status_code=400, detail="name must be a non-empty string")
+    args = body.get("arguments")
+    if args is None:
+        args = {}
+    if not isinstance(args, dict):
+        raise HTTPException(status_code=400, detail="arguments must be an object")
+    return _execute_tool(name.strip(), args)
+
+
 @router.post("/v1/tools/{name}")
 async def v1_tools_exec(req: Request, name: str):
     require_bearer(req)
-    if name not in TOOL_IMPL:
-        raise HTTPException(status_code=404, detail=f"unknown tool: {name}")
-    if not is_tool_allowed(name):
-        raise HTTPException(status_code=403, detail=f"tool not allowed: {name}")
     body = await req.json()
     tr = ToolExecRequest(**body)
-    return TOOL_IMPL[name](tr.arguments)
+    return _execute_tool(name, tr.arguments)
