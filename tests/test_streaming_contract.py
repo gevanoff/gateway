@@ -156,3 +156,130 @@ async def test_chat_completions_streaming_upstream_disconnect_yields_done(monkey
         assert r.status_code == 200
         raw = r.content
         assert raw.endswith(b"data: [DONE]\n\n"), raw[-200:]
+
+
+@pytest.mark.asyncio
+async def test_chat_completions_streaming_upstream_timeout(monkeypatch):
+    """Upstream timeout should yield an error event, then finish + [DONE]."""
+
+    from app.main import app
+    import app.auth as auth
+
+    monkeypatch.setattr(auth, "require_bearer", lambda _req: None)
+
+    import app.openai_routes as openai_routes
+
+    class _Route:
+        backend = "ollama"
+        model = "qwen2.5:7b"
+        reason = "test"
+
+    monkeypatch.setattr(openai_routes, "decide_route", lambda **_kw: _Route())
+
+    import app.upstreams as upstreams
+
+    class _TimeoutStream:
+        async def __aenter__(self):
+            raise httpx.ReadTimeout("timeout", request=httpx.Request("POST", "http://ollama/api/chat"))
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class _FakeAsyncClient:
+        def __init__(self, timeout=None):
+            self.timeout = timeout
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def stream(self, *_a, **_kw):
+            return _TimeoutStream()
+
+    monkeypatch.setattr(upstreams.httpx, "AsyncClient", _FakeAsyncClient)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        r = await client.post(
+            "/v1/chat/completions",
+            json={"model": "fast", "stream": True, "messages": [{"role": "user", "content": "hi"}]},
+            headers={"authorization": "Bearer test", "accept": "text/event-stream"},
+        )
+
+        assert r.status_code == 200
+        raw = r.content
+        assert raw.endswith(b"data: [DONE]\n\n"), raw[-200:]
+        assert b"\"type\":\"upstream_error\"" in raw
+        assert b"\"finish_reason\":\"stop\"" in raw
+
+
+@pytest.mark.asyncio
+async def test_chat_completions_streaming_upstream_disconnect_midstream(monkeypatch):
+    """Upstream disconnect mid-stream should preserve any content already emitted, then end cleanly."""
+
+    from app.main import app
+    import app.auth as auth
+
+    monkeypatch.setattr(auth, "require_bearer", lambda _req: None)
+
+    import app.openai_routes as openai_routes
+
+    class _Route:
+        backend = "ollama"
+        model = "qwen2.5:7b"
+        reason = "test"
+
+    monkeypatch.setattr(openai_routes, "decide_route", lambda **_kw: _Route())
+
+    import app.upstreams as upstreams
+
+    class _FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        async def aiter_lines(self):
+            # Emit one NDJSON payload with content, then simulate a disconnect.
+            yield json.dumps({"message": {"role": "assistant", "content": "hello"}, "done": False})
+            raise httpx.ReadError("disconnect", request=httpx.Request("POST", "http://ollama/api/chat"))
+
+    class _DisconnectStream:
+        async def __aenter__(self):
+            return _FakeResponse()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class _FakeAsyncClient:
+        def __init__(self, timeout=None):
+            self.timeout = timeout
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def stream(self, *_a, **_kw):
+            return _DisconnectStream()
+
+    monkeypatch.setattr(upstreams.httpx, "AsyncClient", _FakeAsyncClient)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        r = await client.post(
+            "/v1/chat/completions",
+            json={"model": "fast", "stream": True, "messages": [{"role": "user", "content": "hi"}]},
+            headers={"authorization": "Bearer test", "accept": "text/event-stream"},
+        )
+
+        assert r.status_code == 200
+        raw = r.content
+        assert raw.endswith(b"data: [DONE]\n\n"), raw[-200:]
+        # Content emitted before disconnect is preserved.
+        assert b"\"content\":\"hello\"" in raw
+        # Disconnect is surfaced as upstream_error.
+        assert b"\"type\":\"upstream_error\"" in raw
+        # Stream still terminates properly.
+        assert b"\"finish_reason\":\"stop\"" in raw
