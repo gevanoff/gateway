@@ -1,9 +1,10 @@
 import json
+import os
 from typing import Any, AsyncIterator, Dict, List
 
 import pytest
 import httpx
-AUTH_HEADERS = {"authorization": "Bearer test-token"}
+AUTH_HEADERS = {"authorization": f"Bearer {os.environ.get('GATEWAY_BEARER_TOKEN', 'test-token')}"}
 
 
 @pytest.mark.asyncio

@@ -2,6 +2,11 @@ import httpx
 import pytest
 
 
+def _auth_headers() -> dict:
+    token = __import__("os").environ.get("GATEWAY_BEARER_TOKEN", "test-token")
+    return {"authorization": f"Bearer {token}"}
+
+
 def _read_jsonl(path) -> list[dict]:
     lines = path.read_text(encoding="utf-8").splitlines()
     out: list[dict] = []
@@ -42,7 +47,7 @@ async def test_tools_exec_replay_id_and_schema_validation(monkeypatch):
         r = await client.post(
             "/v1/tools/echo",
             json={"arguments": {"msg": "hi"}},
-            headers={"authorization": "Bearer test-token"},
+            headers=_auth_headers(),
         )
         assert r.status_code == 200
         j = r.json()
@@ -54,7 +59,7 @@ async def test_tools_exec_replay_id_and_schema_validation(monkeypatch):
         r2 = await client.post(
             "/v1/tools/echo",
             json={"arguments": {"msg": "hi", "extra": 1}},
-            headers={"authorization": "Bearer test-token"},
+            headers=_auth_headers(),
         )
         assert r2.status_code == 400
 
@@ -90,7 +95,7 @@ async def test_tools_writes_jsonl_log_with_replay_id(monkeypatch, tmp_path):
         r = await client.post(
             "/v1/tools/echo",
             json={"arguments": {"msg": "hi"}},
-            headers={"authorization": "Bearer test-token"},
+            headers=_auth_headers(),
         )
         assert r.status_code == 200
         body = r.json()
@@ -135,7 +140,7 @@ async def test_tools_dispatch_endpoint(monkeypatch):
         r = await client.post(
             "/v1/tools",
             json={"name": "echo", "arguments": {"msg": "hello"}},
-            headers={"authorization": "Bearer test-token"},
+            headers=_auth_headers(),
         )
         assert r.status_code == 200
         j = r.json()
