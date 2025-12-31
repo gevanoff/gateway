@@ -1,0 +1,41 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    env:
+      # Required by app.config.Settings
+      GATEWAY_BEARER_TOKEN: test
+      # Keep memory DB writable in CI (avoid /var/lib paths)
+      MEMORY_DB_PATH: ${{ github.workspace }}/.tmp/memory.sqlite
+      # Avoid optional memory v2 init in CI
+      MEMORY_V2_ENABLED: "false"
+      # Keep logs quieter
+      GATEWAY_LOG_LEVEL: INFO
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r app/requirements.freeze.txt
+          python -m pip install -r requirements-dev.txt
+
+      - name: Prepare writable state
+        run: |
+          mkdir -p .tmp
+
+      - name: Run tests
+        run: |
+          pytest -q
