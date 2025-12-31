@@ -63,6 +63,9 @@ class Settings(BaseSettings):
     TOOLS_HTTP_TIMEOUT_SEC: int = 10
     TOOLS_HTTP_MAX_BYTES: int = 200_000
 
+    # Tool bus JSONL log file path.
+    TOOLS_LOG_PATH: str = "/var/lib/gateway/data/tools_bus.jsonl"
+
     TOOLS_GIT_CWD: str = "/var/lib/gateway"
     TOOLS_GIT_TIMEOUT_SEC: int = 20
 

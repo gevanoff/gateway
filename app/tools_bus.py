@@ -23,8 +23,8 @@ router = APIRouter()
 
 
 def _tools_log_path() -> str:
-    # Configurable via env; default stays within /var/lib/gateway.
-    return (getattr(S, "TOOLS_LOG_PATH", "") or "/var/lib/gateway/data/tools_bus.jsonl").strip()
+    # Configurable via Settings; default stays within /var/lib/gateway.
+    return (S.TOOLS_LOG_PATH or "/var/lib/gateway/data/tools_bus.jsonl").strip()
 
 
 def _truncate(s: Any, *, max_chars: int) -> Any:
