@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, AsyncIterator, Dict, List, Literal, Optional
 
 import httpx
@@ -34,6 +35,56 @@ from app import memory_v2
 
 
 router = APIRouter()
+
+
+_ALIAS_IN_REASON = re.compile(r"\balias:([a-z0-9_\-]+)\b", re.IGNORECASE)
+
+
+def _selected_alias_name(request_model: str, route_reason: str) -> Optional[str]:
+    aliases = get_aliases()
+    key = (request_model or "").strip().lower()
+    if key and key in aliases:
+        return key
+    m = _ALIAS_IN_REASON.search(route_reason or "")
+    if m:
+        cand = (m.group(1) or "").strip().lower()
+        if cand in aliases:
+            return cand
+    return None
+
+
+def _apply_alias_constraints(cc: ChatCompletionRequest, *, alias_name: Optional[str]) -> ChatCompletionRequest:
+    if not alias_name:
+        return cc
+
+    a = get_aliases().get(alias_name)
+    if not a:
+        return cc
+
+    # Enforce allow_tools constraint if present.
+    if cc.tools and a.tools is False:
+        raise HTTPException(status_code=400, detail=f"tools not allowed for model alias '{alias_name}'")
+
+    temperature = cc.temperature
+    if temperature is not None and a.temperature_cap is not None:
+        temperature = min(float(temperature), float(a.temperature_cap))
+
+    max_tokens = cc.max_tokens
+    if max_tokens is not None and a.max_tokens_cap is not None:
+        max_tokens = min(int(max_tokens), int(a.max_tokens_cap))
+
+    if temperature == cc.temperature and max_tokens == cc.max_tokens:
+        return cc
+
+    return ChatCompletionRequest(
+        model=cc.model,
+        messages=cc.messages,
+        tools=cc.tools,
+        tool_choice=cc.tool_choice,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        stream=cc.stream,
+    )
 
 
 @router.get("/v1/models")
@@ -81,6 +132,10 @@ async def list_models(req: Request):
             item["context_window"] = a.context_window
         if a.tools is not None:
             item["tools"] = a.tools
+        if a.max_tokens_cap is not None:
+            item["max_tokens_cap"] = a.max_tokens_cap
+        if a.temperature_cap is not None:
+            item["temperature_cap"] = a.temperature_cap
         data["data"].append(item)
 
     return data
@@ -109,6 +164,9 @@ async def chat_completions(req: Request):
     )
     backend: Literal["ollama", "mlx"] = route.backend
     model_name = route.model
+
+    alias_name = _selected_alias_name(cc.model, route.reason)
+    cc = _apply_alias_constraints(cc, alias_name=alias_name)
 
     logger.debug(
         "route chat.completions model=%r stream=%s tools=%s -> backend=%s upstream_model=%s reason=%s",
@@ -190,6 +248,10 @@ async def completions(req: Request):
     )
     backend: Literal["ollama", "mlx"] = route.backend
     model_name = route.model
+
+    # Apply caps/constraints based on the chosen alias (if any).
+    alias_name = _selected_alias_name(cc.model, route.reason)
+    cc = _apply_alias_constraints(cc, alias_name=alias_name)
 
     if cc.stream:
         stream_id = new_id("cmpl")

@@ -283,3 +283,127 @@ async def test_chat_completions_streaming_upstream_disconnect_midstream(monkeypa
         assert b"\"type\":\"upstream_error\"" in raw
         # Stream still terminates properly.
         assert b"\"finish_reason\":\"stop\"" in raw
+
+
+@pytest.mark.asyncio
+async def test_alias_disallows_tools_returns_400(monkeypatch):
+    from app.main import app
+
+    import app.auth as auth
+
+    monkeypatch.setattr(auth, "require_bearer", lambda _req: None)
+
+    # Force alias config: fast disallows tools.
+    import app.model_aliases as model_aliases
+    from app.model_aliases import ModelAlias
+
+    monkeypatch.setattr(
+        model_aliases,
+        "get_aliases",
+        lambda: {"fast": ModelAlias(backend="ollama", upstream_model="qwen2.5:7b", tools=False)},
+    )
+
+    # Use a dummy upstream impl; should not be reached.
+    import app.upstreams as upstreams
+
+    async def _never(*_a, **_kw):
+        raise AssertionError("upstream should not be called")
+
+    monkeypatch.setattr(upstreams, "stream_ollama_chat_as_openai", _never)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        r = await client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "fast",
+                "stream": False,
+                "messages": [{"role": "user", "content": "hi"}],
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {"name": "x", "description": "x", "parameters": {"type": "object", "properties": {}}},
+                    }
+                ],
+            },
+            headers={"authorization": "Bearer test"},
+        )
+
+        assert r.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_alias_caps_clamp_temperature_and_max_tokens(monkeypatch):
+    from app.main import app
+
+    import app.auth as auth
+
+    monkeypatch.setattr(auth, "require_bearer", lambda _req: None)
+
+    import app.model_aliases as model_aliases
+    from app.model_aliases import ModelAlias
+
+    monkeypatch.setattr(
+        model_aliases,
+        "get_aliases",
+        lambda: {
+            "fast": ModelAlias(
+                backend="ollama",
+                upstream_model="qwen2.5:7b",
+                tools=False,
+                max_tokens_cap=7,
+                temperature_cap=0.5,
+            )
+        },
+    )
+
+    import app.upstreams as upstreams
+
+    seen = {}
+
+    async def _capture(req, model_name: str):
+        # Validate clamping happened in openai_routes before we get here.
+        seen["max_tokens"] = req.max_tokens
+        seen["temperature"] = req.temperature
+        # Minimal valid stream.
+        from app.openai_utils import sse, sse_done
+
+        yield sse(
+            {
+                "id": "chatcmpl-test",
+                "object": "chat.completion.chunk",
+                "created": 1,
+                "model": f"ollama:{model_name}",
+                "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}],
+            }
+        )
+        yield sse(
+            {
+                "id": "chatcmpl-test",
+                "object": "chat.completion.chunk",
+                "created": 1,
+                "model": f"ollama:{model_name}",
+                "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+            }
+        )
+        yield sse_done()
+
+    monkeypatch.setattr(upstreams, "stream_ollama_chat_as_openai", _capture)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        r = await client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "fast",
+                "stream": True,
+                "messages": [{"role": "user", "content": "hi"}],
+                "max_tokens": 999,
+                "temperature": 2.0,
+            },
+            headers={"authorization": "Bearer test", "accept": "text/event-stream"},
+        )
+
+        assert r.status_code == 200
+        assert seen["max_tokens"] == 7
+        assert seen["temperature"] == 0.5

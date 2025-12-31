@@ -14,6 +14,8 @@ class ModelAlias:
     upstream_model: str
     context_window: Optional[int] = None
     tools: Optional[bool] = None
+    max_tokens_cap: Optional[int] = None
+    temperature_cap: Optional[float] = None
 
 
 def _default_aliases() -> Dict[str, ModelAlias]:
@@ -73,7 +75,24 @@ def _parse_alias_value(v: Any) -> Optional[ModelAlias]:
         if isinstance(tools_raw, bool):
             tools = tools_raw
 
-        return ModelAlias(backend=backend, upstream_model=model, context_window=context_window, tools=tools)
+        mt = v.get("max_tokens_cap") or v.get("max_tokens") or v.get("max_output_tokens")
+        max_tokens_cap: Optional[int] = None
+        if isinstance(mt, int) and mt > 0:
+            max_tokens_cap = mt
+
+        tc = v.get("temperature_cap") or v.get("temp_cap")
+        temperature_cap: Optional[float] = None
+        if isinstance(tc, (int, float)) and tc >= 0:
+            temperature_cap = float(tc)
+
+        return ModelAlias(
+            backend=backend,
+            upstream_model=model,
+            context_window=context_window,
+            tools=tools,
+            max_tokens_cap=max_tokens_cap,
+            temperature_cap=temperature_cap,
+        )
 
     return None
 
