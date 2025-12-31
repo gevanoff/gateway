@@ -1,14 +1,22 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
+import logging
 import os
 import shlex
 import subprocess
+import threading
 import time
 from typing import Any, Dict
 from pathlib import Path
 from urllib.parse import urlparse
+
+try:
+    import resource  # type: ignore
+except Exception:  # pragma: no cover
+    resource = None  # type: ignore
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
@@ -22,9 +30,250 @@ from app.openai_utils import new_id, now_unix
 router = APIRouter()
 
 
+log = logging.getLogger(__name__)
+
+
+from app import metrics
+
+
+_REGISTRY_CACHE: dict[str, Any] = {"path": None, "mtime": None, "tools": {}}
+
+
+_TOOLS_CONCURRENCY_SEM: threading.Semaphore | None = None
+
+
+def _tools_concurrency_sem() -> threading.Semaphore:
+    global _TOOLS_CONCURRENCY_SEM
+    if _TOOLS_CONCURRENCY_SEM is None:
+        n = getattr(S, "TOOLS_MAX_CONCURRENT", 8)
+        try:
+            n = int(n)
+        except Exception:
+            n = 8
+        if n <= 0:
+            n = 1
+        _TOOLS_CONCURRENCY_SEM = threading.Semaphore(n)
+    return _TOOLS_CONCURRENCY_SEM
+
+
+def _load_tools_registry() -> Dict[str, Dict[str, Any]]:
+    """Load explicitly declared tools from an infra-owned JSON file.
+
+    This is *not* automatic discovery; the registry is an explicit declaration list.
+    Missing/invalid registry is treated as "no external tools".
+
+    Expected format:
+      {"tools": [
+        {
+          "name": "my_tool",
+          "version": "1",
+          "description": "...",
+          "parameters": { ... JSON Schema ... },
+          "exec": {"type": "subprocess", "argv": ["/path/to/bin", "--flag"], "timeout_sec": 10, "cwd": "/tmp"}
+        }
+      ]}
+    """
+
+    path = (getattr(S, "TOOLS_REGISTRY_PATH", "") or "").strip()
+    if not path:
+        return {}
+
+    try:
+        st = os.stat(path)
+        mtime = int(st.st_mtime)
+    except Exception:
+        return {}
+
+    if _REGISTRY_CACHE.get("path") == path and _REGISTRY_CACHE.get("mtime") == mtime:
+        tools = _REGISTRY_CACHE.get("tools")
+        return tools if isinstance(tools, dict) else {}
+
+    expected_sha = (getattr(S, "TOOLS_REGISTRY_SHA256", "") or "").strip().lower()
+    try:
+        if expected_sha:
+            data = Path(path).read_bytes()
+            actual = hashlib.sha256(data).hexdigest().lower()
+            if actual != expected_sha:
+                try:
+                    log.warning("tools registry sha256 mismatch (expected=%s actual=%s); ignoring registry", expected_sha, actual)
+                except Exception:
+                    pass
+                return {}
+    except Exception:
+        return {}
+
+    tools_out: Dict[str, Dict[str, Any]] = {}
+    try:
+        raw = Path(path).read_text(encoding="utf-8")
+        payload = json.loads(raw)
+        items = payload.get("tools") if isinstance(payload, dict) else None
+        if isinstance(items, list):
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                name = item.get("name")
+                version = item.get("version")
+                params = item.get("parameters")
+                exec_spec = item.get("exec")
+                if not (isinstance(name, str) and name.strip()):
+                    continue
+                if not (isinstance(version, str) and version.strip()):
+                    continue
+                if not isinstance(params, dict):
+                    continue
+                if not (isinstance(exec_spec, dict) and exec_spec.get("type") == "subprocess"):
+                    continue
+                argv = exec_spec.get("argv")
+                if not (isinstance(argv, list) and argv and all(isinstance(x, str) and x for x in argv)):
+                    continue
+                tools_out[name.strip()] = {
+                    "name": name.strip(),
+                    "version": version.strip(),
+                    "description": item.get("description") or "",
+                    "parameters": params,
+                    "exec": {
+                        "type": "subprocess",
+                        "argv": argv,
+                        "timeout_sec": exec_spec.get("timeout_sec"),
+                        "cwd": exec_spec.get("cwd"),
+                    },
+                }
+    except Exception:
+        tools_out = {}
+
+    _REGISTRY_CACHE["path"] = path
+    _REGISTRY_CACHE["mtime"] = mtime
+    _REGISTRY_CACHE["tools"] = tools_out
+    return tools_out
+
+
 def _tools_log_path() -> str:
     # Configurable via Settings; default stays within /var/lib/gateway.
-    return (S.TOOLS_LOG_PATH or "/var/lib/gateway/data/tools_bus.jsonl").strip()
+    return (S.TOOLS_LOG_PATH or "/var/lib/gateway/data/tools/invocations.jsonl").strip()
+
+def _tools_log_mode() -> str:
+    return getattr(S, "TOOLS_LOG_MODE", "ndjson")
+
+def _tools_log_dir() -> str:
+    return getattr(S, "TOOLS_LOG_DIR", "/var/lib/gateway/data/tools")
+
+def _write_jsonl_line(path: str, event: Dict[str, Any]) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    line = json.dumps(event, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(line)
+        f.write("\n")
+
+def _write_invocation_file(replay_id: str, event: Dict[str, Any]) -> None:
+    base_dir = _tools_log_dir()
+    os.makedirs(base_dir, exist_ok=True)
+    # replay_id is generated internally (req-*/tool-*), safe for filenames.
+    path = os.path.join(base_dir, f"{replay_id}.json")
+    payload = json.dumps(event, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(payload)
+        f.write("\n")
+
+def _log_tool_event(replay_id: str, event: Dict[str, Any]) -> None:
+    mode = _tools_log_mode()
+    if mode in ("ndjson", "both"):
+        _write_jsonl_line(_tools_log_path(), event)
+    if mode in ("per_invocation", "both"):
+        _write_invocation_file(replay_id, event)
+
+
+_WARNED_UNDECLARED_ALLOWLIST: set[str] = set()
+
+
+_RATE_LOCK = threading.Lock()
+_RATE_STATE: dict[str, dict[str, float]] = {}
+
+
+def _bearer_token(req: Request) -> str:
+    try:
+        auth = (req.headers.get("authorization") or "").strip()
+    except Exception:
+        auth = ""
+    if not auth.lower().startswith("bearer "):
+        return ""
+    return auth.split(" ", 1)[1].strip()
+
+
+def _rate_limit(req: Request) -> None:
+    """Optional token-bucket rate limit for /v1/tools endpoints."""
+
+    try:
+        rps = float(getattr(S, "TOOLS_RATE_LIMIT_RPS", 0.0) or 0.0)
+        burst = int(getattr(S, "TOOLS_RATE_LIMIT_BURST", 0) or 0)
+    except Exception:
+        rps = 0.0
+        burst = 0
+    if rps <= 0.0 or burst <= 0:
+        return
+
+    tok = _bearer_token(req)
+    if not tok:
+        return
+
+    now = time.monotonic()
+    with _RATE_LOCK:
+        st = _RATE_STATE.get(tok)
+        if not st:
+            st = {"tokens": float(burst), "t": now}
+            _RATE_STATE[tok] = st
+        tokens = float(st.get("tokens", 0.0))
+        last = float(st.get("t", now))
+
+        # refill
+        dt = max(0.0, now - last)
+        tokens = min(float(burst), tokens + dt * rps)
+        if tokens < 1.0:
+            st["tokens"] = tokens
+            st["t"] = now
+            raise HTTPException(
+                status_code=429,
+                detail={
+                    "error": "rate limited",
+                    "error_type": "rate_limited",
+                    "error_message": "rate limited",
+                },
+            )
+        tokens -= 1.0
+        st["tokens"] = tokens
+        st["t"] = now
+
+
+def _warn_allowlisted_undeclared(name: str) -> None:
+    if not isinstance(name, str) or not name:
+        return
+    if name in _WARNED_UNDECLARED_ALLOWLIST:
+        return
+    _WARNED_UNDECLARED_ALLOWLIST.add(name)
+    try:
+        log.warning("tools: allowlisted but undeclared: %s", name)
+    except Exception:
+        pass
+
+
+def _resolve_declared_tool(name: str) -> tuple[dict | None, dict | None, str]:
+    """Resolve a tool declaration.
+
+    Returns:
+      (schema, registry_def, source)
+
+    - schema: tool schema dict (either builtin schema or registry entry)
+    - registry_def: registry entry if source == "registry", else None
+    - source: "builtin"|"registry"|"missing"
+    """
+
+    registry = _load_tools_registry()
+    reg_def = registry.get(name) if isinstance(registry, dict) else None
+    if isinstance(reg_def, dict):
+        return reg_def, reg_def, "registry"
+    sch = TOOL_SCHEMAS.get(name)
+    if isinstance(sch, dict):
+        return sch, None, "builtin"
+    return None, None, "missing"
 
 
 def _truncate(s: Any, *, max_chars: int) -> Any:
@@ -40,16 +289,187 @@ def _safe_json(obj: Any, *, max_chars: int = 20_000) -> str:
         return "{}"
 
 
-def _log_tool_event(event: Dict[str, Any]) -> None:
-    path = _tools_log_path()
+def _request_hash(*, tool: str, version: str, args: Dict[str, Any]) -> str:
+    """Deterministic request hash for replay/correlation.
+
+    Uses canonical JSON (sorted keys, compact separators).
+    """
+
+    payload = {"tool": tool, "version": version, "arguments": args}
+    raw = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _run_subprocess_tool(*, exec_spec: Dict[str, Any], args: Dict[str, Any]) -> Dict[str, Any]:
+    argv = exec_spec.get("argv")
+    if not (isinstance(argv, list) and argv and all(isinstance(x, str) and x for x in argv)):
+        return {"ok": False, "error": "invalid exec spec (argv)"}
+
+    timeout = exec_spec.get("timeout_sec")
     try:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        line = json.dumps(event, separators=(",", ":"), sort_keys=True)
-        with open(path, "a", encoding="utf-8") as f:
-            f.write(line + "\n")
+        timeout_sec = float(timeout) if timeout is not None else float(S.TOOLS_SHELL_TIMEOUT_SEC)
     except Exception:
-        # Tool execution should not fail just because logging failed.
+        timeout_sec = float(S.TOOLS_SHELL_TIMEOUT_SEC)
+
+    cwd = exec_spec.get("cwd")
+    if not isinstance(cwd, str) or not cwd.strip():
+        cwd = S.TOOLS_SHELL_CWD
+    os.makedirs(cwd, exist_ok=True)
+
+    stdin_text = json.dumps(args, separators=(",", ":"), sort_keys=True)
+    try:
+        cp = subprocess.run(
+            argv,
+            input=stdin_text,
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=timeout_sec,
+            check=False,
+        )
+        try:
+            so_max = int(getattr(S, "TOOLS_SUBPROCESS_STDOUT_MAX_CHARS", 20000))
+        except Exception:
+            so_max = 20000
+        try:
+            se_max = int(getattr(S, "TOOLS_SUBPROCESS_STDERR_MAX_CHARS", 20000))
+        except Exception:
+            se_max = 20000
+        if so_max <= 0:
+            so_max = 20000
+        if se_max <= 0:
+            se_max = 20000
+
+        stdout = (cp.stdout or "")[-so_max:]
+        stderr = (cp.stderr or "")[-se_max:]
+
+        stdout_json = None
+        try:
+            s = stdout.strip()
+            if s:
+                stdout_json = json.loads(s)
+        except Exception:
+            stdout_json = None
+
+        return {
+            "ok": cp.returncode == 0,
+            "exit_code": int(cp.returncode),
+            "stdout": stdout,
+            "stdout_json": stdout_json,
+            "stderr": stderr,
+            "__io_bytes": len(stdin_text.encode("utf-8"))
+            + len(stdout.encode("utf-8", errors="ignore"))
+            + len(stderr.encode("utf-8", errors="ignore")),
+        }
+    except subprocess.TimeoutExpired:
+        return {
+            "ok": False,
+            "exit_code": None,
+            "stdout": "",
+            "stdout_json": None,
+            "stderr": f"timeout after {timeout_sec}s",
+            "__io_bytes": len(stdin_text.encode("utf-8")),
+        }
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}", "__io_bytes": len(stdin_text.encode("utf-8"))}
+
+
+def _attach_stdout_json(out: Dict[str, Any]) -> None:
+    """If tool returns stdout, expose a parsed stdout_json field.
+
+    This helps clients/tools return structured output deterministically while
+    preserving the raw stdout string.
+    """
+
+    if "stdout_json" in out:
         return
+    stdout = out.get("stdout")
+    if not isinstance(stdout, str):
+        return
+    parsed = None
+    try:
+        s = stdout.strip()
+        if s:
+            parsed = json.loads(s)
+    except Exception:
+        parsed = None
+    out["stdout_json"] = parsed
+
+
+def _normalize_tool_error(out: Dict[str, Any]) -> None:
+    """Ensure a consistent error envelope for tool failures.
+
+    Adds:
+      - error_type
+      - error_message
+
+    Preserves the existing 'error' field for backward compatibility.
+    """
+
+    try:
+        if bool(out.get("ok")) is True:
+            return
+
+        et = out.get("error_type")
+        em = out.get("error_message")
+        if isinstance(et, str) and et and isinstance(em, str) and em:
+            return
+
+        err = out.get("error")
+        if isinstance(err, str) and err:
+            # We often format errors as "TypeName: message".
+            if ": " in err:
+                head, tail = err.split(": ", 1)
+                out.setdefault("error_type", head.strip() or "tool_error")
+                out.setdefault("error_message", tail.strip() or err)
+            else:
+                out.setdefault("error_type", "tool_error")
+                out.setdefault("error_message", err)
+            return
+
+        exit_code = out.get("exit_code")
+        if isinstance(exit_code, int) and exit_code != 0:
+            out.setdefault("error_type", "subprocess_nonzero_exit")
+            out.setdefault("error_message", f"exit_code={exit_code}")
+            return
+
+        stderr = out.get("stderr")
+        if isinstance(stderr, str) and stderr.strip():
+            out.setdefault("error_type", "stderr")
+            out.setdefault("error_message", stderr.strip())
+            return
+
+        out.setdefault("error_type", "tool_error")
+        out.setdefault("error_message", "tool failed")
+    except Exception:
+        return
+
+
+def _normalize_tool_result(out: Any) -> Dict[str, Any]:
+    """Normalize a tool implementation result into a dict with boolean ok.
+
+    Tool implementations are expected to return a dict with an 'ok' boolean.
+    Anything else is treated as an invalid tool result.
+    """
+
+    if not isinstance(out, dict):
+        return {
+            "ok": False,
+            "error": "invalid tool result",
+            "error_type": "invalid_tool_result",
+            "error_message": "tool returned a non-object result",
+        }
+    ok = out.get("ok")
+    if not isinstance(ok, bool):
+        # Preserve the raw output for debugging, but keep it bounded.
+        return {
+            "ok": False,
+            "error": "invalid tool result",
+            "error_type": "invalid_tool_result",
+            "error_message": "tool result missing boolean 'ok'",
+            "result": _truncate(out, max_chars=10_000),
+        }
+    return out
 
 
 def _validate_against_schema(params_schema: Dict[str, Any], args: Any) -> list[str]:
@@ -187,7 +607,7 @@ def tool_read_file(args: Dict[str, Any]) -> Dict[str, Any]:
         truncated = len(data) > max_bytes
         data = data[:max_bytes]
         text = data.decode("utf-8", errors="replace")
-        return {"ok": True, "path": str(p), "truncated": truncated, "content": text}
+        return {"ok": True, "path": str(p), "truncated": truncated, "content": text, "__io_bytes": len(data)}
     except Exception as e:
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
@@ -227,13 +647,14 @@ def tool_write_file(args: Dict[str, Any]) -> Dict[str, Any]:
 
         # Basic size limit to avoid large writes.
         max_bytes = int(S.TOOLS_FS_MAX_BYTES)
-        if len(content.encode("utf-8")) > max_bytes:
+        content_bytes = content.encode("utf-8")
+        if len(content_bytes) > max_bytes:
             return {"ok": False, "error": f"content too large (>{max_bytes} bytes)"}
 
         os.makedirs(str(p.parent), exist_ok=True)
         with open(p, "w", encoding="utf-8") as f:
             f.write(content)
-        return {"ok": True, "path": str(p)}
+        return {"ok": True, "path": str(p), "__io_bytes": len(content_bytes)}
     except Exception as e:
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
@@ -300,6 +721,7 @@ def tool_http_fetch(args: Dict[str, Any]) -> Dict[str, Any]:
             "truncated": len(out) >= max_bytes,
             "body_text": body_text,
             "body_base64": None if body_text is not None else base64.b64encode(bytes(out)).decode("ascii"),
+            "__io_bytes": len(out),
         }
     except Exception as e:
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
@@ -375,6 +797,7 @@ def is_tool_allowed(name: str) -> bool:
 TOOL_SCHEMAS: Dict[str, Dict[str, Any]] = {
     "shell": {
         "name": "shell",
+        "version": "1",
         "description": "Run a command locally (no shell=True).",
         "parameters": {
             "type": "object",
@@ -385,6 +808,7 @@ TOOL_SCHEMAS: Dict[str, Dict[str, Any]] = {
     },
     "read_file": {
         "name": "read_file",
+        "version": "1",
         "description": "Read a local text file.",
         "parameters": {
             "type": "object",
@@ -395,6 +819,7 @@ TOOL_SCHEMAS: Dict[str, Dict[str, Any]] = {
     },
     "write_file": {
         "name": "write_file",
+        "version": "1",
         "description": "Write a local text file.",
         "parameters": {
             "type": "object",
@@ -405,6 +830,7 @@ TOOL_SCHEMAS: Dict[str, Dict[str, Any]] = {
     },
     "git": {
         "name": "git",
+        "version": "1",
         "description": "Run a limited set of git subcommands in a configured repo directory.",
         "parameters": {
             "type": "object",
@@ -415,6 +841,7 @@ TOOL_SCHEMAS: Dict[str, Dict[str, Any]] = {
     },
     "http_fetch": {
         "name": "http_fetch",
+        "version": "1",
         "description": "Fetch a URL via GET with host allowlist and size limits.",
         "parameters": {
             "type": "object",
@@ -431,73 +858,347 @@ TOOL_SCHEMAS: Dict[str, Dict[str, Any]] = {
 
 
 def run_tool_call(name: str, arguments_json: str) -> Dict[str, Any]:
-    fn = TOOL_IMPL.get(name)
-    if not fn:
-        return {"ok": False, "error": f"unknown tool: {name}"}
+    if not isinstance(name, str) or not name.strip():
+        return {
+            "ok": False,
+            "error": "tool name must be a non-empty string",
+            "error_type": "invalid_request",
+            "error_message": "tool name must be a non-empty string",
+        }
+    name = name.strip()
+
     if not is_tool_allowed(name):
-        return {"ok": False, "error": f"tool not allowed: {name}"}
+        # Fail closed, and avoid revealing undeclared tools.
+        return {
+            "ok": False,
+            "error": f"unknown tool: {name}",
+            "error_type": "unknown_tool",
+            "error_message": f"unknown tool: {name}",
+        }
+
     try:
         args = json.loads(arguments_json) if arguments_json else {}
     except Exception:
-        return {"ok": False, "error": "tool arguments must be valid JSON"}
-    return fn(args)
+        return {
+            "ok": False,
+            "error": "tool arguments must be valid JSON",
+            "error_type": "invalid_arguments",
+            "error_message": "tool arguments must be valid JSON",
+        }
+
+    if not isinstance(args, dict):
+        return {
+            "ok": False,
+            "error": "tool arguments must be a JSON object",
+            "error_type": "invalid_arguments",
+            "error_message": "tool arguments must be a JSON object",
+        }
+
+    try:
+        # Delegate to the same deterministic executor used by /v1/tools.
+        return _execute_tool(name, args)
+    except HTTPException as e:
+        detail = e.detail
+        if isinstance(detail, dict):
+            msg = detail.get("error") or "tool call failed"
+            out: Dict[str, Any] = {
+                "ok": False,
+                "error": str(msg),
+                "error_type": "tool_call_failed",
+                "error_message": str(msg),
+            }
+            issues = detail.get("issues")
+            if isinstance(issues, list):
+                out["issues"] = issues
+            return out
+        return {
+            "ok": False,
+            "error": str(detail),
+            "error_type": "tool_call_failed",
+            "error_message": str(detail),
+        }
+    except Exception as e:
+        return {
+            "ok": False,
+            "error": f"{type(e).__name__}: {e}",
+            "error_type": type(e).__name__,
+            "error_message": str(e),
+        }
 
 
 def _execute_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
     """Execute a tool with validation + replay ID + deterministic logging."""
 
-    if name not in TOOL_IMPL:
-        raise HTTPException(status_code=404, detail=f"unknown tool: {name}")
-    if not is_tool_allowed(name):
-        raise HTTPException(status_code=403, detail=f"tool not allowed: {name}")
+    sem = _tools_concurrency_sem()
+    try:
+        timeout_sec = float(getattr(S, "TOOLS_CONCURRENCY_TIMEOUT_SEC", 5.0))
+    except Exception:
+        timeout_sec = 5.0
 
-    sch = TOOL_SCHEMAS.get(name)
-    if sch and isinstance(sch.get("parameters"), dict):
-        errs = _validate_against_schema(sch["parameters"], args)
-        if errs:
-            raise HTTPException(status_code=400, detail={"error": "invalid tool arguments", "issues": errs})
+    acquired = False
+    try:
+        acquired = sem.acquire(timeout=timeout_sec)
+    except Exception:
+        acquired = sem.acquire(blocking=True)
+
+    if not acquired:
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "error": "tool capacity exceeded",
+                "error_type": "rate_limited",
+                "error_message": "tool capacity exceeded",
+            },
+        )
+
+    if not is_tool_allowed(name):
+        # Fail closed, and avoid revealing undeclared tools.
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": f"unknown tool: {name}",
+                "error_type": "unknown_tool",
+                "error_message": f"unknown tool: {name}",
+            },
+        )
+
+    sch, reg_def, _src = _resolve_declared_tool(name)
+    if not (isinstance(sch, dict) and isinstance(sch.get("parameters"), dict) and isinstance(sch.get("version"), str)):
+        # No implicit discovery: tools must be explicitly declared and versioned.
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": f"undeclared tool: {name}",
+                "error_type": "undeclared_tool",
+                "error_message": f"undeclared tool: {name}",
+            },
+        )
+
+    errs = _validate_against_schema(sch["parameters"], args)
+    if errs:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "invalid tool arguments",
+                "error_type": "invalid_arguments",
+                "error_message": "invalid tool arguments",
+                "issues": errs,
+            },
+        )
+
+    version = str(sch["version"])
+    req_hash = _request_hash(tool=name, version=version, args=args)
 
     replay_id = new_id("tool")
     ts = now_unix()
     t0 = time.monotonic()
 
+    # Best-effort CPU accounting.
+    cpu_self_0 = time.process_time()
+    cpu_children_0 = None
+    if resource is not None:
+        try:
+            ru = resource.getrusage(resource.RUSAGE_CHILDREN)
+            cpu_children_0 = float(ru.ru_utime) + float(ru.ru_stime)
+        except Exception:
+            cpu_children_0 = None
+
     out: Dict[str, Any]
     try:
-        out = TOOL_IMPL[name](args)
-    except Exception as e:
-        out = {"ok": False, "error": f"{type(e).__name__}: {e}"}
+        try:
+            if reg_def and isinstance(reg_def.get("exec"), dict) and reg_def["exec"].get("type") == "subprocess":
+                out = _normalize_tool_result(_run_subprocess_tool(exec_spec=reg_def["exec"], args=args))
+            else:
+                out = _normalize_tool_result(TOOL_IMPL[name](args))
+        except Exception as e:
+            out = _normalize_tool_result({"ok": False, "error": f"{type(e).__name__}: {e}"})
+    finally:
+        try:
+            sem.release()
+        except Exception:
+            pass
+
+    _attach_stdout_json(out)
+    _normalize_tool_error(out)
 
     dur_ms = (time.monotonic() - t0) * 1000.0
+
+    cpu_self_1 = time.process_time()
+    cpu_children_1 = None
+    if resource is not None:
+        try:
+            ru = resource.getrusage(resource.RUSAGE_CHILDREN)
+            cpu_children_1 = float(ru.ru_utime) + float(ru.ru_stime)
+        except Exception:
+            cpu_children_1 = None
+
+    # Envelope fields (some may be stubbed / best-effort).
+    tool_runtime_ms = round(dur_ms, 1)
+    tool_cpu_ms: float | None
+    try:
+        cpu = max(0.0, float(cpu_self_1 - cpu_self_0))
+        if cpu_children_0 is not None and cpu_children_1 is not None:
+            cpu += max(0.0, float(cpu_children_1 - cpu_children_0))
+        tool_cpu_ms = round(cpu * 1000.0, 1)
+    except Exception:
+        tool_cpu_ms = None
+
+    tool_io_bytes = 0
+    if isinstance(out, dict):
+        # Prefer tool-provided byte counts (file/network I/O), otherwise fall back
+        # to stdout/stderr size for subprocess-backed tools.
+        hinted = out.pop("__io_bytes", None)
+        if isinstance(hinted, int) and hinted >= 0:
+            tool_io_bytes = hinted
+        else:
+            so = out.get("stdout")
+            se = out.get("stderr")
+            if isinstance(so, str):
+                tool_io_bytes += len(so.encode("utf-8", errors="ignore"))
+            if isinstance(se, str):
+                tool_io_bytes += len(se.encode("utf-8", errors="ignore"))
 
     event = {
         "ts": ts,
         "replay_id": replay_id,
+        "request_hash": req_hash,
         "tool": name,
+        "version": version,
         "ok": bool(out.get("ok")) if isinstance(out, dict) else False,
-        "duration_ms": round(dur_ms, 1),
+        "tool_runtime_ms": tool_runtime_ms,
+        "tool_cpu_ms": tool_cpu_ms,
+        "tool_io_bytes": tool_io_bytes,
         "args": _truncate(args, max_chars=10_000),
         "result": _truncate(out, max_chars=20_000),
     }
-    _log_tool_event(event)
+
+    try:
+        _log_tool_event(replay_id, event)
+    except Exception:
+        pass
+
+    # Best-effort metrics.
+    try:
+        if getattr(S, "METRICS_ENABLED", True):
+            metrics.observe_tool(name, bool(out.get("ok")), float(tool_runtime_ms))
+    except Exception:
+        pass
 
     # Backward-compatible response shape, with replay_id attached.
     if isinstance(out, dict):
-        return {"replay_id": replay_id, **out}
-    return {"replay_id": replay_id, "ok": False, "error": "invalid tool result"}
+        return {
+            "replay_id": replay_id,
+            "request_hash": req_hash,
+            "tool_runtime_ms": tool_runtime_ms,
+            "tool_cpu_ms": tool_cpu_ms,
+            "tool_io_bytes": tool_io_bytes,
+            **out,
+        }
+    return {
+        "replay_id": replay_id,
+        "request_hash": req_hash,
+        "tool_runtime_ms": tool_runtime_ms,
+        "tool_cpu_ms": tool_cpu_ms,
+        "tool_io_bytes": tool_io_bytes,
+        "ok": False,
+        "error": "invalid tool result",
+    }
 
 
 @router.get("/v1/tools")
 async def v1_tools_list(req: Request):
     require_bearer(req)
+    _rate_limit(req)
     allowed = sorted(_allowed_tool_names())
     data = []
     for name in allowed:
-        sch = TOOL_SCHEMAS.get(name)
+        sch, _reg_def, src = _resolve_declared_tool(name)
         if sch:
-            data.append({"name": sch["name"], "description": sch["description"], "parameters": sch["parameters"]})
+            data.append(
+                {
+                    "name": sch["name"],
+                    "version": sch.get("version", ""),
+                    "description": sch["description"],
+                    "parameters": sch["parameters"],
+                    "declared": True,
+                    "source": src,
+                }
+            )
         else:
-            data.append({"name": name, "description": "(no schema)", "parameters": {"type": "object"}})
+            # No implicit discovery: if allowed but not declared, show it explicitly as missing.
+            _warn_allowlisted_undeclared(name)
+            data.append(
+                {
+                    "name": name,
+                    "version": "",
+                    "description": "(undeclared)",
+                    "parameters": {"type": "object"},
+                    "declared": False,
+                    "source": "missing",
+                }
+            )
     return {"object": "list", "data": data}
+
+
+@router.get("/v1/tools/replay/{replay_id}")
+async def v1_tools_replay(req: Request, replay_id: str):
+    """Fetch a previously logged tool invocation event.
+
+    Prefers per-invocation file logs (TOOLS_LOG_DIR/{replay_id}.json). If not
+    present, falls back to scanning the NDJSON log (TOOLS_LOG_PATH).
+    """
+
+    require_bearer(req)
+    _rate_limit(req)
+    rid = (replay_id or "").strip()
+    if not rid:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "invalid replay id",
+                "error_type": "invalid_request",
+                "error_message": "replay_id must be a non-empty string",
+            },
+        )
+
+    # Prefer per-invocation file
+    try:
+        p = os.path.join(_tools_log_dir(), f"{rid}.json")
+        if os.path.exists(p):
+            raw = Path(p).read_text(encoding="utf-8")
+            return json.loads(raw)
+    except Exception:
+        pass
+
+    # Fallback: scan NDJSON log for the last matching replay_id.
+    try:
+        path = _tools_log_path()
+        if os.path.exists(path):
+            last = None
+            with open(path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        obj = json.loads(line)
+                    except Exception:
+                        continue
+                    if isinstance(obj, dict) and obj.get("replay_id") == rid:
+                        last = obj
+            if isinstance(last, dict):
+                return last
+    except Exception:
+        pass
+
+    raise HTTPException(
+        status_code=404,
+        detail={
+            "error": f"replay not found: {rid}",
+            "error_type": "replay_not_found",
+            "error_message": f"replay not found: {rid}",
+        },
+    )
 
 
 @router.post("/v1/tools")
@@ -509,23 +1210,46 @@ async def v1_tools_dispatch(req: Request):
     """
 
     require_bearer(req)
+    _rate_limit(req)
     body = await req.json()
     if not isinstance(body, dict):
-        raise HTTPException(status_code=400, detail="body must be an object")
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "invalid request body",
+                "error_type": "invalid_request",
+                "error_message": "body must be an object",
+            },
+        )
     name = body.get("name")
     if not isinstance(name, str) or not name.strip():
-        raise HTTPException(status_code=400, detail="name must be a non-empty string")
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "invalid request body",
+                "error_type": "invalid_request",
+                "error_message": "name must be a non-empty string",
+            },
+        )
     args = body.get("arguments")
     if args is None:
         args = {}
     if not isinstance(args, dict):
-        raise HTTPException(status_code=400, detail="arguments must be an object")
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "invalid request body",
+                "error_type": "invalid_request",
+                "error_message": "arguments must be an object",
+            },
+        )
     return _execute_tool(name.strip(), args)
 
 
 @router.post("/v1/tools/{name}")
 async def v1_tools_exec(req: Request, name: str):
     require_bearer(req)
+    _rate_limit(req)
     body = await req.json()
     tr = ToolExecRequest(**body)
     return _execute_tool(name, tr.arguments)

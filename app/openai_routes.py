@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from typing import Any, AsyncIterator, Dict, List, Literal, Optional
 
 import httpx
@@ -166,6 +167,24 @@ async def chat_completions(req: Request):
     backend: Literal["ollama", "mlx"] = route.backend
     model_name = route.model
 
+    # Request instrumentation metadata (used by middleware JSONL logger).
+    try:
+        inst = getattr(req.state, "instrument", None)
+        if not isinstance(inst, dict):
+            inst = {}
+        inst.update(
+            {
+                "op": "chat.completions",
+                "backend": backend,
+                "upstream_model": model_name,
+                "router_reason": route.reason,
+                "has_tools": bool(cc.tools),
+            }
+        )
+        req.state.instrument = inst
+    except Exception:
+        pass
+
     alias_name = _selected_alias_name(cc.model, route.reason)
     cc = _apply_alias_constraints(cc, alias_name=alias_name)
 
@@ -206,10 +225,17 @@ async def chat_completions(req: Request):
         out.headers["X-Router-Reason"] = route.reason
         return out
 
+    t0 = time.monotonic()
     if cc.tools:
         resp = await tool_loop(cc, backend, model_name)
     else:
         resp = await (call_mlx_openai(cc_routed) if backend == "mlx" else call_ollama(cc, model_name))
+    try:
+        inst = getattr(req.state, "instrument", None)
+        if isinstance(inst, dict):
+            inst["upstream_ms"] = round((time.monotonic() - t0) * 1000.0, 1)
+    except Exception:
+        pass
 
     out = JSONResponse(resp)
     out.headers["X-Backend-Used"] = backend

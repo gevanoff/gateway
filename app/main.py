@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 import time
 
 from fastapi import FastAPI, Request
+from fastapi.responses import StreamingResponse
 
 import httpx
 
 from app.config import S, logger
+from app.openai_utils import new_id, now_unix
+from app.request_log import StreamMetrics, write_request_event
 from app.health_routes import router as health_router
 from app.memory_legacy import memory_init
 from app.memory_routes import router as memory_router
@@ -14,12 +18,9 @@ from app.openai_routes import router as openai_router
 from app.model_aliases import get_aliases
 from app.tools_bus import router as tools_router
 from app import memory_v2
+from app import metrics
 
 
-app = FastAPI(title="Local AI Gateway", version="0.1")
-
-
-@app.on_event("startup")
 async def _startup_check_models() -> None:
     """Non-fatal checks to catch common misconfigurations early."""
 
@@ -52,17 +53,102 @@ async def _startup_check_models() -> None:
         logger.info("startup: model availability check skipped (%s: %s)", type(e).__name__, e)
 
 
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    await _startup_check_models()
+    yield
+
+
+app = FastAPI(title="Local AI Gateway", version="0.1", lifespan=lifespan)
+
+
 @app.middleware("http")
 async def log_requests(req: Request, call_next):
-    start = time.time()
+    start_wall = time.time()
+    start_monotonic = time.monotonic()
+    request_id = new_id("req")
+    req.state.request_id = request_id
+    req.state.instrument = getattr(req.state, "instrument", {})
     resp = None
+    did_wrap_stream = False
     try:
         resp = await call_next(req)
+
+        # Correlation header for clients and log lookup.
+        try:
+            resp.headers["X-Request-Id"] = request_id
+        except Exception:
+            pass
+
+        # Streaming responses must be instrumented during iteration.
+        content_type = ""
+        try:
+            content_type = (resp.headers.get("content-type") or "").lower()
+        except Exception:
+            content_type = ""
+        is_streaming = content_type.startswith("text/event-stream") and hasattr(resp, "body_iterator")
+        if not is_streaming:
+            is_streaming = isinstance(resp, StreamingResponse) or (
+                getattr(resp, "media_type", None) == "text/event-stream" and hasattr(resp, "body_iterator")
+            )
+        if is_streaming:
+            orig_iter = resp.body_iterator
+            metrics = StreamMetrics(started_monotonic=start_monotonic)
+            did_wrap_stream = True
+
+            async def _wrap():
+                try:
+                    async for chunk in orig_iter:
+                        if isinstance(chunk, (bytes, bytearray)):
+                            metrics.on_chunk(bytes(chunk))
+                        yield chunk
+                except Exception as e:
+                    metrics.abort_reason = f"{type(e).__name__}: {e}"
+                    raise
+                finally:
+                    base = {
+                        "ts": now_unix(),
+                        "request_id": request_id,
+                        "method": req.method,
+                        "path": req.url.path,
+                        "status": resp.status_code,
+                    }
+                    extra = getattr(req.state, "instrument", None)
+                    if isinstance(extra, dict):
+                        base.update(extra)
+                    base.update(metrics.finish())
+                    write_request_event(base)
+
+            resp.body_iterator = _wrap()
+
         return resp
     finally:
-        dur_ms = (time.time() - start) * 1000.0
+        dur_ms = (time.time() - start_wall) * 1000.0
         status = resp.status_code if resp is not None else 500
         logger.info("%s %s -> %d (%.1fms)", req.method, req.url.path, status, dur_ms)
+
+        # Best-effort metrics.
+        try:
+            if getattr(S, "METRICS_ENABLED", True):
+                metrics.observe_request(req.url.path, status, dur_ms)
+        except Exception:
+            pass
+
+        # Non-stream requests: log immediately.
+        if resp is not None and not did_wrap_stream:
+            base = {
+                "ts": now_unix(),
+                "request_id": request_id,
+                "method": req.method,
+                "path": req.url.path,
+                "status": resp.status_code,
+                "stream": False,
+                "duration_ms": round((time.monotonic() - start_monotonic) * 1000.0, 1),
+            }
+            extra = getattr(req.state, "instrument", None)
+            if isinstance(extra, dict):
+                base.update(extra)
+            write_request_event(base)
 
 
 # One-time DB init

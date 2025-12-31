@@ -64,7 +64,35 @@ class Settings(BaseSettings):
     TOOLS_HTTP_MAX_BYTES: int = 200_000
 
     # Tool bus JSONL log file path.
-    TOOLS_LOG_PATH: str = "/var/lib/gateway/data/tools_bus.jsonl"
+    TOOLS_LOG_PATH: str = "/var/lib/gateway/data/tools/invocations.jsonl"
+
+    # Tool invocation logging mode:
+    # - ndjson: append-only JSONL at TOOLS_LOG_PATH
+    # - per_invocation: one JSON file per replay_id under TOOLS_LOG_DIR
+    # - both: do both
+    TOOLS_LOG_MODE: Literal["ndjson", "per_invocation", "both"] = "ndjson"
+    TOOLS_LOG_DIR: str = "/var/lib/gateway/data/tools"
+
+    # Tool execution hard limits
+    TOOLS_MAX_CONCURRENT: int = 8
+    TOOLS_CONCURRENCY_TIMEOUT_SEC: float = 5.0
+    TOOLS_SUBPROCESS_STDOUT_MAX_CHARS: int = 20000
+    TOOLS_SUBPROCESS_STDERR_MAX_CHARS: int = 20000
+
+    # Optional: registry integrity check (sha256 hex). If set and mismatched, registry is ignored.
+    TOOLS_REGISTRY_SHA256: str = ""
+
+    # Optional: per-bearer-token rate limit for /v1/tools endpoints.
+    # Disabled when <= 0.
+    TOOLS_RATE_LIMIT_RPS: float = 0.0
+    TOOLS_RATE_LIMIT_BURST: int = 0
+
+    # Optional: metrics endpoint
+    METRICS_ENABLED: bool = True
+
+    # Optional infra-owned tool registry (explicit tool declarations).
+    # When present, tools can be declared with version + JSON schema + subprocess exec spec.
+    TOOLS_REGISTRY_PATH: str = "/var/lib/gateway/app/tools_registry.json"
 
     TOOLS_GIT_CWD: str = "/var/lib/gateway"
     TOOLS_GIT_TIMEOUT_SEC: int = 20
@@ -81,6 +109,10 @@ class Settings(BaseSettings):
     MEMORY_V2_ENABLED: bool = True
     MEMORY_V2_MAX_AGE_SEC: int = 60 * 60 * 24 * 30
     MEMORY_V2_TYPES_DEFAULT: str = "fact,preference,project"
+
+    # Minimal request instrumentation (JSONL). Intended for debugging/observability.
+    REQUEST_LOG_ENABLED: bool = True
+    REQUEST_LOG_PATH: str = "/var/lib/gateway/data/requests.jsonl"
 
 
 S = Settings()
