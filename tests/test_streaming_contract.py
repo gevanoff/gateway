@@ -3,6 +3,7 @@ from typing import Any, AsyncIterator, Dict, List
 
 import pytest
 import httpx
+AUTH_HEADERS = {"authorization": "Bearer test-token"}
 
 
 @pytest.mark.asyncio
@@ -38,8 +39,8 @@ async def test_chat_completions_streaming_contract_golden(monkeypatch):
 
     monkeypatch.setattr(openai_routes, "decide_route", lambda **_kw: _Route())
 
-    # Patch the upstream streaming generator to yield a deterministic sequence.
-    import app.upstreams as upstreams
+    # Patch the streaming generator used by the route. Note: openai_routes imports
+    # the symbol directly, so patching app.upstreams alone is not sufficient.
     from app.openai_utils import sse, sse_done
 
     async def _fake_stream_ollama_chat_as_openai(*_a, **_kw) -> AsyncIterator[bytes]:
@@ -72,14 +73,14 @@ async def test_chat_completions_streaming_contract_golden(monkeypatch):
         )
         yield sse_done()
 
-    monkeypatch.setattr(upstreams, "stream_ollama_chat_as_openai", _fake_stream_ollama_chat_as_openai)
+    monkeypatch.setattr(openai_routes, "stream_ollama_chat_as_openai", _fake_stream_ollama_chat_as_openai)
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         r = await client.post(
             "/v1/chat/completions",
             json={"model": "fast", "stream": True, "messages": [{"role": "user", "content": "hi"}]},
-            headers={"authorization": "Bearer test", "accept": "text/event-stream"},
+                headers={**AUTH_HEADERS, "accept": "text/event-stream"},
         )
 
         assert r.status_code == 200
@@ -149,7 +150,7 @@ async def test_chat_completions_streaming_upstream_disconnect_yields_done(monkey
         r = await client.post(
             "/v1/chat/completions",
             json={"model": "fast", "stream": True, "messages": [{"role": "user", "content": "hi"}]},
-            headers={"authorization": "Bearer test", "accept": "text/event-stream"},
+                headers={**AUTH_HEADERS, "accept": "text/event-stream"},
         )
 
         # Still a 200 stream, but must terminate.
@@ -198,14 +199,15 @@ async def test_chat_completions_streaming_upstream_timeout(monkeypatch):
         def stream(self, *_a, **_kw):
             return _TimeoutStream()
 
+    real_async_client = httpx.AsyncClient
     monkeypatch.setattr(upstreams.httpx, "AsyncClient", _FakeAsyncClient)
 
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with real_async_client(transport=transport, base_url="http://test") as client:
         r = await client.post(
             "/v1/chat/completions",
             json={"model": "fast", "stream": True, "messages": [{"role": "user", "content": "hi"}]},
-            headers={"authorization": "Bearer test", "accept": "text/event-stream"},
+            headers={**AUTH_HEADERS, "accept": "text/event-stream"},
         )
 
         assert r.status_code == 200
@@ -264,14 +266,15 @@ async def test_chat_completions_streaming_upstream_disconnect_midstream(monkeypa
         def stream(self, *_a, **_kw):
             return _DisconnectStream()
 
+    real_async_client = httpx.AsyncClient
     monkeypatch.setattr(upstreams.httpx, "AsyncClient", _FakeAsyncClient)
 
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with real_async_client(transport=transport, base_url="http://test") as client:
         r = await client.post(
             "/v1/chat/completions",
             json={"model": "fast", "stream": True, "messages": [{"role": "user", "content": "hi"}]},
-            headers={"authorization": "Bearer test", "accept": "text/event-stream"},
+            headers={**AUTH_HEADERS, "accept": "text/event-stream"},
         )
 
         assert r.status_code == 200
@@ -294,6 +297,7 @@ async def test_alias_disallows_tools_returns_400(monkeypatch):
     monkeypatch.setattr(auth, "require_bearer", lambda _req: None)
 
     # Force alias config: fast disallows tools.
+    import app.openai_routes as openai_routes
     import app.model_aliases as model_aliases
     from app.model_aliases import ModelAlias
 
@@ -302,6 +306,8 @@ async def test_alias_disallows_tools_returns_400(monkeypatch):
         "get_aliases",
         lambda: {"fast": ModelAlias(backend="ollama", upstream_model="qwen2.5:7b", tools=False)},
     )
+
+    monkeypatch.setattr(openai_routes, "get_aliases", model_aliases.get_aliases)
 
     # Use a dummy upstream impl; should not be reached.
     import app.upstreams as upstreams
@@ -326,7 +332,7 @@ async def test_alias_disallows_tools_returns_400(monkeypatch):
                     }
                 ],
             },
-            headers={"authorization": "Bearer test"},
+                headers=AUTH_HEADERS,
         )
 
         assert r.status_code == 400
@@ -339,6 +345,8 @@ async def test_alias_caps_clamp_temperature_and_max_tokens(monkeypatch):
     import app.auth as auth
 
     monkeypatch.setattr(auth, "require_bearer", lambda _req: None)
+
+    import app.openai_routes as openai_routes
 
     import app.model_aliases as model_aliases
     from app.model_aliases import ModelAlias
@@ -357,7 +365,7 @@ async def test_alias_caps_clamp_temperature_and_max_tokens(monkeypatch):
         },
     )
 
-    import app.upstreams as upstreams
+    monkeypatch.setattr(openai_routes, "get_aliases", model_aliases.get_aliases)
 
     seen = {}
 
@@ -388,7 +396,7 @@ async def test_alias_caps_clamp_temperature_and_max_tokens(monkeypatch):
         )
         yield sse_done()
 
-    monkeypatch.setattr(upstreams, "stream_ollama_chat_as_openai", _capture)
+    monkeypatch.setattr(openai_routes, "stream_ollama_chat_as_openai", _capture)
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
@@ -401,7 +409,7 @@ async def test_alias_caps_clamp_temperature_and_max_tokens(monkeypatch):
                 "max_tokens": 999,
                 "temperature": 2.0,
             },
-            headers={"authorization": "Bearer test", "accept": "text/event-stream"},
+            headers={**AUTH_HEADERS, "accept": "text/event-stream"},
         )
 
         assert r.status_code == 200

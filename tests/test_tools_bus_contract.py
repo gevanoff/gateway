@@ -30,7 +30,11 @@ async def test_tools_exec_replay_id_and_schema_validation(monkeypatch):
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         # Valid call
-        r = await client.post("/v1/tools/echo", json={"arguments": {"msg": "hi"}})
+        r = await client.post(
+            "/v1/tools/echo",
+            json={"arguments": {"msg": "hi"}},
+            headers={"authorization": "Bearer test-token"},
+        )
         assert r.status_code == 200
         j = r.json()
         assert "replay_id" in j and isinstance(j["replay_id"], str) and j["replay_id"]
@@ -38,7 +42,11 @@ async def test_tools_exec_replay_id_and_schema_validation(monkeypatch):
         assert j["echo"] == "hi"
 
         # Invalid: unexpected field
-        r2 = await client.post("/v1/tools/echo", json={"arguments": {"msg": "hi", "extra": 1}})
+        r2 = await client.post(
+            "/v1/tools/echo",
+            json={"arguments": {"msg": "hi", "extra": 1}},
+            headers={"authorization": "Bearer test-token"},
+        )
         assert r2.status_code == 400
 
 
@@ -67,7 +75,11 @@ async def test_tools_dispatch_endpoint(monkeypatch):
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        r = await client.post("/v1/tools", json={"name": "echo", "arguments": {"msg": "hello"}})
+        r = await client.post(
+            "/v1/tools",
+            json={"name": "echo", "arguments": {"msg": "hello"}},
+            headers={"authorization": "Bearer test-token"},
+        )
         assert r.status_code == 200
         j = r.json()
         assert j["ok"] is True
