@@ -86,6 +86,7 @@ def decide_route(
     headers: Dict[str, str],
     messages: Optional[Iterable[Dict[str, Any]]] = None,
     has_tools: bool = False,
+    enable_policy: bool = False,
 ) -> RouteDecision:
     """Select {backend, model} with simple, stable heuristics.
 
@@ -130,6 +131,11 @@ def decide_route(
     if explicitly_pinned:
         normalized = _normalize_model(request_model, backend, cfg)
         return RouteDecision(backend=backend, model=normalized, reason="pinned:model")
+
+    # If policy is disabled, do not apply tiering heuristics.
+    if not enable_policy:
+        normalized = _normalize_model(request_model, backend, cfg)
+        return RouteDecision(backend=backend, model=normalized, reason="direct:model")
 
     size = _approx_text_size(messages or [])
 

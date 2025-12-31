@@ -161,6 +161,7 @@ async def chat_completions(req: Request):
         headers=hdrs,
         messages=[m.model_dump(exclude_none=True) for m in cc.messages],
         has_tools=bool(cc.tools),
+        enable_policy=S.ROUTER_ENABLE_POLICY,
     )
     backend: Literal["ollama", "mlx"] = route.backend
     model_name = route.model
@@ -245,6 +246,7 @@ async def completions(req: Request):
         headers=hdrs,
         messages=[m.model_dump(exclude_none=True) for m in cc.messages],
         has_tools=False,
+        enable_policy=S.ROUTER_ENABLE_POLICY,
     )
     backend: Literal["ollama", "mlx"] = route.backend
     model_name = route.model

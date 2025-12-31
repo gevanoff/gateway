@@ -31,6 +31,10 @@ class Settings(BaseSettings):
 
     ROUTER_LONG_CONTEXT_CHARS: int = 40_000
 
+    # If true, enable heuristic routing (tools/long-context/fast tier selection).
+    # If false (default), routing is strictly alias/prefix/explicit-model driven.
+    ROUTER_ENABLE_POLICY: bool = False
+
     # Model alias registry (JSON via env, or JSON file on disk)
     # Example env:
     #   MODEL_ALIASES_JSON='{"aliases":{"coder":{"backend":"ollama","model":"deepseek-coder:33b"}}}'
