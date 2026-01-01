@@ -24,4 +24,26 @@ Options:
 
 - Check an already-running gateway: `python tools/verify_gateway.py --base-url http://127.0.0.1:8800 --token <token>`
 - Require a healthy backend (otherwise backend-dependent checks are skipped): `--require-backend`
+- Appliance smoke-test mode (implies backend required): `--appliance`
 - Skip pytest (HTTP checks only): `--skip-pytest`
+
+## Agent runtime v1
+
+Deterministic single-process agent loop with replayable transcripts.
+
+Endpoints (bearer-protected):
+
+- `POST /v1/agent/run`
+- `GET /v1/agent/replay/{run_id}`
+
+## Eval harness
+
+On-demand/nightly eval runner (stdlib-only):
+
+- `python tools/run_evals.py`
+
+## Appliance manifest
+
+Freeze a release manifest (stdlib-only):
+
+- `python tools/freeze_release.py`
