@@ -7,6 +7,7 @@ import logging
 import os
 import shlex
 import subprocess
+import tempfile
 import threading
 import time
 from typing import Any, Dict
@@ -312,9 +313,18 @@ def _run_subprocess_tool(*, exec_spec: Dict[str, Any], args: Dict[str, Any]) -> 
         timeout_sec = float(S.TOOLS_SHELL_TIMEOUT_SEC)
 
     cwd = exec_spec.get("cwd")
+    using_default_cwd = False
     if not isinstance(cwd, str) or not cwd.strip():
         cwd = S.TOOLS_SHELL_CWD
-    os.makedirs(cwd, exist_ok=True)
+        using_default_cwd = True
+
+    try:
+        os.makedirs(cwd, exist_ok=True)
+    except Exception as e:
+        if using_default_cwd:
+            cwd = tempfile.mkdtemp(prefix="gateway-tools-")
+        else:
+            return {"ok": False, "error": f"cwd not writable: {type(e).__name__}: {e}"}
 
     stdin_text = json.dumps(args, separators=(",", ":"), sort_keys=True)
     try:
@@ -539,7 +549,10 @@ def tool_shell(args: Dict[str, Any]) -> Dict[str, Any]:
         return {"ok": False, "error": "cmd must be a non-empty string"}
 
     cwd = S.TOOLS_SHELL_CWD
-    os.makedirs(cwd, exist_ok=True)
+    try:
+        os.makedirs(cwd, exist_ok=True)
+    except Exception as e:
+        return {"ok": False, "error": f"cwd not writable: {type(e).__name__}: {e}"}
 
     allowed = {p.strip() for p in (S.TOOLS_SHELL_ALLOWED_CMDS or "").split(",") if p.strip()}
     if not allowed:
@@ -741,7 +754,10 @@ def tool_git(args: Dict[str, Any]) -> Dict[str, Any]:
         return {"ok": False, "error": f"git subcommand not allowed: {subcmd}"}
 
     cwd = (S.TOOLS_GIT_CWD or "").strip() or S.TOOLS_SHELL_CWD
-    os.makedirs(cwd, exist_ok=True)
+    try:
+        os.makedirs(cwd, exist_ok=True)
+    except Exception as e:
+        return {"ok": False, "error": f"cwd not writable: {type(e).__name__}: {e}"}
 
     try:
         cp = subprocess.run(
