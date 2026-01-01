@@ -267,6 +267,8 @@ def _run_http_checks(*, base_url: str, token: str, require_backend: bool) -> lis
     except Exception as e:
         bad("models", f"{type(e).__name__}: {e}")
 
+    tool_names: set[str] = set()
+
     # Tool bus listing should be available regardless of tool enables.
     try:
         status, _h, body = _http_request("GET", v1 + "/tools", headers=bearer)
@@ -275,8 +277,8 @@ def _run_http_checks(*, base_url: str, token: str, require_backend: bool) -> lis
             try:
                 payload = _json_from_bytes(body)
                 data = payload.get("data") if isinstance(payload, dict) else None
-                names = {x.get("name") for x in data} if isinstance(data, list) else set()
-                if "noop" in names:
+                tool_names = {x.get("name") for x in data if isinstance(x, dict)} if isinstance(data, list) else set()
+                if "noop" in tool_names:
                     ok("tools_has_noop")
                 else:
                     bad("tools_has_noop", "noop tool missing from /v1/tools (expected built-in safe tool)")
@@ -339,6 +341,31 @@ def _run_http_checks(*, base_url: str, token: str, require_backend: bool) -> lis
             bad("tool_replay", f"{type(e).__name__}: {e}")
     else:
         bad("tool_replay", "missing replay_id from tool execution")
+
+    # http_fetch validation (only if allowlisted)
+    if "http_fetch" in tool_names:
+        try:
+            status, _h, body = _http_request(
+                "POST",
+                v1 + "/tools/http_fetch",
+                headers=bearer,
+                json_body={"arguments": {"url": base_url.rstrip("/") + "/health", "method": "GET"}},
+            )
+            if status == 200:
+                try:
+                    payload = _json_from_bytes(body)
+                    if isinstance(payload, dict) and payload.get("ok") is True and int(payload.get("status", 0) or 0) == 200:
+                        ok("tool_exec_http_fetch_health")
+                    else:
+                        bad("tool_exec_http_fetch_health", f"unexpected body: {body[:200].decode('utf-8', errors='replace')}")
+                except Exception as e:
+                    bad("tool_exec_http_fetch_health", f"parse error: {type(e).__name__}: {e}")
+            else:
+                bad("tool_exec_http_fetch_health", f"status={status} body={body[:200].decode('utf-8', errors='replace')}")
+        except Exception as e:
+            bad("tool_exec_http_fetch_health", f"{type(e).__name__}: {e}")
+    else:
+        ok("tool_exec_http_fetch_health", detail="skipped (http_fetch not allowlisted)")
 
     # Backend-dependent checks
     backends_ok = False
