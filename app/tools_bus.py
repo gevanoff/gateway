@@ -780,7 +780,22 @@ def tool_git(args: Dict[str, Any]) -> Dict[str, Any]:
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
 
+def tool_noop(args: Dict[str, Any]) -> Dict[str, Any]:
+    """A safe tool for end-to-end verification.
+
+    Always succeeds and echoes a single string back.
+    """
+
+    text = args.get("text")
+    if text is None:
+        text = ""
+    if not isinstance(text, str):
+        return {"ok": False, "error": "text must be a string"}
+    return {"ok": True, "text": text}
+
+
 TOOL_IMPL = {
+    "noop": tool_noop,
     "shell": tool_shell,
     "read_file": tool_read_file,
     "write_file": tool_write_file,
@@ -795,6 +810,8 @@ def _allowed_tool_names() -> set[str]:
         return {p.strip() for p in raw.split(",") if p.strip()}
 
     allowed: set[str] = set()
+    # Always-available safe tool for verification.
+    allowed.add("noop")
     if S.TOOLS_ALLOW_SHELL:
         allowed.add("shell")
     if S.TOOLS_ALLOW_FS:
@@ -811,6 +828,17 @@ def is_tool_allowed(name: str) -> bool:
 
 
 TOOL_SCHEMAS: Dict[str, Dict[str, Any]] = {
+    "noop": {
+        "name": "noop",
+        "version": "1",
+        "description": "No-op tool for end-to-end verification.",
+        "parameters": {
+            "type": "object",
+            "properties": {"text": {"type": "string"}},
+            "required": [],
+            "additionalProperties": False,
+        },
+    },
     "shell": {
         "name": "shell",
         "version": "1",

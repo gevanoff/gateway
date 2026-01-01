@@ -96,6 +96,12 @@ def _http_request(
         raise RuntimeError(f"{type(e).__name__}: {e}")
 
 
+def _json_from_bytes(b: bytes) -> object:
+    if not b:
+        raise ValueError("empty body")
+    return json.loads(b.decode("utf-8"))
+
+
 def _http_stream_until_done(
     url: str,
     *,
@@ -266,10 +272,73 @@ def _run_http_checks(*, base_url: str, token: str, require_backend: bool) -> lis
         status, _h, body = _http_request("GET", v1 + "/tools", headers=bearer)
         if status == 200:
             ok("tools_list")
+            try:
+                payload = _json_from_bytes(body)
+                data = payload.get("data") if isinstance(payload, dict) else None
+                names = {x.get("name") for x in data} if isinstance(data, list) else set()
+                if "noop" in names:
+                    ok("tools_has_noop")
+                else:
+                    bad("tools_has_noop", "noop tool missing from /v1/tools (expected built-in safe tool)")
+            except Exception as e:
+                bad("tools_has_noop", f"parse error: {type(e).__name__}: {e}")
         else:
             bad("tools_list", f"status={status} body={body[:200].decode('utf-8', errors='replace')}")
     except Exception as e:
         bad("tools_list", f"{type(e).__name__}: {e}")
+
+    # Tool execution + replay (safe, deterministic)
+    replay_id: Optional[str] = None
+    try:
+        status, _h, body = _http_request("POST", v1 + "/tools/noop", headers=bearer, json_body={"arguments": {"text": "verify"}})
+        if status == 200:
+            try:
+                payload = _json_from_bytes(body)
+                if isinstance(payload, dict) and payload.get("ok") is True:
+                    ok("tool_exec_noop")
+                    rid = payload.get("replay_id")
+                    replay_id = rid if isinstance(rid, str) and rid.strip() else None
+                else:
+                    bad("tool_exec_noop", f"unexpected body: {body[:200].decode('utf-8', errors='replace')}")
+            except Exception as e:
+                bad("tool_exec_noop", f"parse error: {type(e).__name__}: {e}")
+        else:
+            bad("tool_exec_noop", f"status={status} body={body[:200].decode('utf-8', errors='replace')}")
+    except Exception as e:
+        bad("tool_exec_noop", f"{type(e).__name__}: {e}")
+
+    # Dispatcher execution path
+    try:
+        status, _h, body = _http_request("POST", v1 + "/tools", headers=bearer, json_body={"name": "noop", "arguments": {"text": "verify"}})
+        if status == 200:
+            try:
+                payload = _json_from_bytes(body)
+                if isinstance(payload, dict) and payload.get("ok") is True:
+                    ok("tool_dispatch_noop")
+                else:
+                    bad("tool_dispatch_noop", f"unexpected body: {body[:200].decode('utf-8', errors='replace')}")
+            except Exception as e:
+                bad("tool_dispatch_noop", f"parse error: {type(e).__name__}: {e}")
+        else:
+            bad("tool_dispatch_noop", f"status={status} body={body[:200].decode('utf-8', errors='replace')}")
+    except Exception as e:
+        bad("tool_dispatch_noop", f"{type(e).__name__}: {e}")
+
+    # Replay should succeed if tool logging is configured.
+    if replay_id:
+        try:
+            status, _h, body = _http_request("GET", v1 + f"/tools/replay/{replay_id}", headers=bearer, timeout_sec=10.0)
+            if status == 200:
+                ok("tool_replay")
+            else:
+                bad(
+                    "tool_replay",
+                    f"status={status} body={body[:200].decode('utf-8', errors='replace')} (enable TOOLS_LOG_MODE/TOOLS_LOG_PATH/TOOLS_LOG_DIR)",
+                )
+        except Exception as e:
+            bad("tool_replay", f"{type(e).__name__}: {e}")
+    else:
+        bad("tool_replay", "missing replay_id from tool execution")
 
     # Backend-dependent checks
     backends_ok = False
