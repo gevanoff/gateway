@@ -15,8 +15,16 @@ router = APIRouter()
 
 
 @router.get("/health")
+@router.get("/health/", include_in_schema=False)
 async def health():
     return {"ok": True}
+
+
+@router.head("/health", include_in_schema=False)
+@router.head("/health/", include_in_schema=False)
+async def health_head():
+    # Explicit HEAD support avoids 405s for some health checkers.
+    return PlainTextResponse("", status_code=200)
 
 
 @router.get("/health/upstreams")
