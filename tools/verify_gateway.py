@@ -367,6 +367,71 @@ def _run_http_checks(*, base_url: str, token: str, require_backend: bool) -> lis
     else:
         ok("tool_exec_http_fetch_health", detail="skipped (http_fetch not allowlisted)")
 
+    # http_fetch_local validation (only if allowlisted)
+    if "http_fetch_local" in tool_names:
+        try:
+            status, _h, body = _http_request(
+                "POST",
+                v1 + "/tools/http_fetch_local",
+                headers=bearer,
+                json_body={"arguments": {"url": base_url.rstrip("/") + "/health", "method": "GET"}},
+            )
+            if status == 200:
+                try:
+                    payload = _json_from_bytes(body)
+                    if isinstance(payload, dict) and payload.get("ok") is True and int(payload.get("status", 0) or 0) == 200:
+                        ok("tool_exec_http_fetch_local_health")
+                    else:
+                        bad("tool_exec_http_fetch_local_health", f"unexpected body: {body[:200].decode('utf-8', errors='replace')}")
+                except Exception as e:
+                    bad("tool_exec_http_fetch_local_health", f"parse error: {type(e).__name__}: {e}")
+            else:
+                bad("tool_exec_http_fetch_local_health", f"status={status} body={body[:200].decode('utf-8', errors='replace')}")
+        except Exception as e:
+            bad("tool_exec_http_fetch_local_health", f"{type(e).__name__}: {e}")
+    else:
+        ok("tool_exec_http_fetch_local_health", detail="skipped (http_fetch_local not allowlisted)")
+
+    # system_info validation (only if allowlisted)
+    if "system_info" in tool_names:
+        try:
+            status, _h, body = _http_request("POST", v1 + "/tools/system_info", headers=bearer, json_body={"arguments": {}})
+            if status == 200:
+                try:
+                    payload = _json_from_bytes(body)
+                    if isinstance(payload, dict) and payload.get("ok") is True:
+                        ok("tool_exec_system_info")
+                    else:
+                        bad("tool_exec_system_info", f"unexpected body: {body[:200].decode('utf-8', errors='replace')}")
+                except Exception as e:
+                    bad("tool_exec_system_info", f"parse error: {type(e).__name__}: {e}")
+            else:
+                bad("tool_exec_system_info", f"status={status} body={body[:200].decode('utf-8', errors='replace')}")
+        except Exception as e:
+            bad("tool_exec_system_info", f"{type(e).__name__}: {e}")
+    else:
+        ok("tool_exec_system_info", detail="skipped (system_info not allowlisted)")
+
+    # models_refresh validation (only if allowlisted)
+    if "models_refresh" in tool_names:
+        try:
+            status, _h, body = _http_request("POST", v1 + "/tools/models_refresh", headers=bearer, json_body={"arguments": {}})
+            if status == 200:
+                try:
+                    payload = _json_from_bytes(body)
+                    if isinstance(payload, dict) and payload.get("ok") is True:
+                        ok("tool_exec_models_refresh")
+                    else:
+                        bad("tool_exec_models_refresh", f"unexpected body: {body[:200].decode('utf-8', errors='replace')}")
+                except Exception as e:
+                    bad("tool_exec_models_refresh", f"parse error: {type(e).__name__}: {e}")
+            else:
+                bad("tool_exec_models_refresh", f"status={status} body={body[:200].decode('utf-8', errors='replace')}")
+        except Exception as e:
+            bad("tool_exec_models_refresh", f"{type(e).__name__}: {e}")
+    else:
+        ok("tool_exec_models_refresh", detail="skipped (models_refresh not allowlisted)")
+
     # Backend-dependent checks
     backends_ok = False
     try:
@@ -375,8 +440,8 @@ def _run_http_checks(*, base_url: str, token: str, require_backend: bool) -> lis
             try:
                 payload = json.loads(body.decode("utf-8"))
                 statuses = payload.get("upstreams") if isinstance(payload, dict) else None
-                if isinstance(statuses, list):
-                    backends_ok = any((isinstance(x, dict) and x.get("ok") is True) for x in statuses)
+                if isinstance(statuses, dict):
+                    backends_ok = any((isinstance(v, dict) and v.get("ok") is True) for v in statuses.values())
             except Exception:
                 backends_ok = False
             ok("health_upstreams", detail=("backend_ok" if backends_ok else "no_backend_ok"))
@@ -390,6 +455,88 @@ def _run_http_checks(*, base_url: str, token: str, require_backend: bool) -> lis
         return results
 
     if backends_ok:
+        # Embeddings
+        try:
+            status, _h, body = _http_request(
+                "POST",
+                v1 + "/embeddings",
+                headers=bearer,
+                json_body={"model": "default", "input": "Hello from appliance smoketest."},
+                timeout_sec=30.0,
+            )
+            if status == 200:
+                try:
+                    payload = _json_from_bytes(body)
+                    data = payload.get("data") if isinstance(payload, dict) else None
+                    ok_shape = (
+                        isinstance(data, list)
+                        and len(data) >= 1
+                        and isinstance(data[0], dict)
+                        and isinstance((data[0].get("embedding") if data else None), list)
+                    )
+                    if ok_shape:
+                        ok("embeddings")
+                    else:
+                        bad("embeddings", f"unexpected body: {body[:200].decode('utf-8', errors='replace')}")
+                except Exception as e:
+                    bad("embeddings", f"parse error: {type(e).__name__}: {e}")
+            else:
+                bad("embeddings", f"status={status} body={body[:200].decode('utf-8', errors='replace')}")
+        except Exception as e:
+            bad("embeddings", f"{type(e).__name__}: {e}")
+
+        # Minimal /v1/responses compatibility (non-stream)
+        try:
+            status, _h, body = _http_request(
+                "POST",
+                v1 + "/responses",
+                headers=bearer,
+                json_body={"model": "fast", "input": "Say hi.", "stream": False},
+            )
+            if status == 200:
+                try:
+                    payload = _json_from_bytes(body)
+                    if isinstance(payload, dict) and payload.get("object") == "response":
+                        ok("responses_non_stream")
+                    else:
+                        bad("responses_non_stream", f"unexpected body: {body[:200].decode('utf-8', errors='replace')}")
+                except Exception as e:
+                    bad("responses_non_stream", f"parse error: {type(e).__name__}: {e}")
+            else:
+                bad("responses_non_stream", f"status={status} body={body[:200].decode('utf-8', errors='replace')}")
+        except Exception as e:
+            bad("responses_non_stream", f"{type(e).__name__}: {e}")
+
+        # /v1/responses streaming: verify we see the DONE marker.
+        stream_headers = dict(bearer)
+        stream_headers["accept"] = "text/event-stream"
+        ok_stream, detail = _http_stream_until_done(
+            v1 + "/responses",
+            headers=stream_headers,
+            json_body={"model": "fast", "input": "Count 1..3.", "stream": True},
+        )
+        if ok_stream:
+            ok("responses_stream")
+        else:
+            bad("responses_stream", detail)
+
+        # Memory UX endpoints (non-mutating check): export should either work (200) or be intentionally disabled (400).
+        try:
+            status, _h, body = _http_request(
+                "GET",
+                base_url.rstrip("/") + "/v1/memory/export?limit=1",
+                headers=bearer,
+                timeout_sec=10.0,
+            )
+            if status == 200:
+                ok("memory_export")
+            elif status == 400 and b"memory v2 disabled" in body.lower():
+                ok("memory_export", detail="skipped (memory v2 disabled)")
+            else:
+                bad("memory_export", f"status={status} body={body[:200].decode('utf-8', errors='replace')}")
+        except Exception as e:
+            bad("memory_export", f"{type(e).__name__}: {e}")
+
         # Non-streaming chat completion
         payload = {"model": "fast", "stream": False, "messages": [{"role": "user", "content": "Say hi."}]}
         try:
@@ -451,11 +598,19 @@ def main(argv: list[str]) -> int:
         help="Fail if no healthy upstream backend is available (otherwise backend-dependent checks are skipped).",
     )
     p.add_argument(
+        "--appliance",
+        action="store_true",
+        help="Appliance smoke-test mode (implies --require-backend).",
+    )
+    p.add_argument(
         "--no-start",
         action="store_true",
         help="Do not auto-start uvicorn (requires --base-url).",
     )
     ns = p.parse_args(argv)
+
+    if ns.appliance:
+        ns.require_backend = True
 
     repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 

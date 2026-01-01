@@ -82,5 +82,46 @@ class MemoryCompactRequest(BaseModel):
     include_compacted: bool = False
 
 
+class MemoryDeleteRequest(BaseModel):
+    ids: List[str]
+
+
+class MemoryImportRequest(BaseModel):
+    items: List[MemoryUpsertRequest]
+
+
 class ToolExecRequest(BaseModel):
     arguments: Dict[str, Any] = {}
+
+
+class AgentSpecModel(BaseModel):
+    """Agent spec loaded from a fixed JSON file.
+
+    Note: this is a narrow validation layer; additional enforcement happens
+    at runtime (tiers, budgets, allowlists).
+    """
+
+    model: str
+    tier: int = 0
+    max_turns: int = 8
+    max_runtime_sec: Optional[float] = 60.0
+    max_total_tool_io_bytes: Optional[int] = 2_000_000
+    tools_allowlist: Optional[List[str]] = None
+
+
+class AgentRunRequest(BaseModel):
+    agent: str = "default"
+    input: Optional[str] = None
+    messages: Optional[List[ChatMessage]] = None
+
+
+class AgentRunResponse(BaseModel):
+    run_id: str
+    request_hash: str
+    agent: str
+    backend: Literal["ollama", "mlx"]
+    upstream_model: str
+    tier: int
+    ok: bool
+    output_text: str = ""
+    events: List[Dict[str, Any]]

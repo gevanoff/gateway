@@ -17,6 +17,20 @@ class Settings(BaseSettings):
     GATEWAY_PORT: int = 8800
     GATEWAY_BEARER_TOKEN: str
 
+    # Optional multi-token auth (comma-separated). When set, any listed token is accepted.
+    # If empty, falls back to single-token GATEWAY_BEARER_TOKEN.
+    GATEWAY_BEARER_TOKENS: str = ""
+
+    # Optional per-token policy JSON. Format: {"<token>": { ...policy... }, ...}
+    # Policy keys are best-effort and currently used for tool allowlists/rate limits.
+    GATEWAY_TOKEN_POLICIES_JSON: str = ""
+
+    # Optional request guardrails.
+    # - MAX_REQUEST_BYTES: 0 disables. When enabled, requests exceeding this size return 413.
+    # - IP_ALLOWLIST: comma-separated IPs and/or CIDRs (e.g. "127.0.0.1,10.0.0.0/8"). Empty allows all.
+    MAX_REQUEST_BYTES: int = 1_000_000
+    IP_ALLOWLIST: str = ""
+
     DEFAULT_BACKEND: Literal["ollama", "mlx"] = "ollama"
 
     # Backends can each have "strong" and "fast" model choices.
@@ -46,6 +60,10 @@ class Settings(BaseSettings):
     TOOLS_ALLOW_HTTP_FETCH: bool = False
 
     TOOLS_ALLOW_GIT: bool = False
+
+    # Safe built-in tools (disabled by default; can be enabled or allowlisted).
+    TOOLS_ALLOW_SYSTEM_INFO: bool = False
+    TOOLS_ALLOW_MODELS_REFRESH: bool = False
 
     # Optional explicit allowlist; if set, only these tools may be executed.
     # Example: "read_file,write_file,http_fetch"
@@ -113,6 +131,19 @@ class Settings(BaseSettings):
     # Minimal request instrumentation (JSONL). Intended for debugging/observability.
     REQUEST_LOG_ENABLED: bool = True
     REQUEST_LOG_PATH: str = "/var/lib/gateway/data/requests.jsonl"
+
+    # Agent runtime v1 (single-process, deterministic)
+    AGENT_SPECS_PATH: str = "/var/lib/gateway/app/agent_specs.json"
+    AGENT_RUNS_LOG_PATH: str = "/var/lib/gateway/data/agent/runs.jsonl"
+    AGENT_RUNS_LOG_DIR: str = "/var/lib/gateway/data/agent"
+    AGENT_RUNS_LOG_MODE: Literal["ndjson", "per_run", "both"] = "per_run"
+
+    # Admission control / load shedding
+    AGENT_BACKEND_CONCURRENCY_OLLAMA: int = 4
+    AGENT_BACKEND_CONCURRENCY_MLX: int = 2
+    AGENT_QUEUE_MAX: int = 32
+    AGENT_QUEUE_TIMEOUT_SEC: float = 2.0
+    AGENT_SHED_HEAVY: bool = True
 
 
 S = Settings()

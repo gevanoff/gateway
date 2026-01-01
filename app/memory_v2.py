@@ -239,3 +239,15 @@ def mark_compacted(
     )
     conn.commit()
     conn.close()
+
+
+def delete_items(*, db_path: str, ids: Sequence[str]) -> Dict[str, Any]:
+    ids = [x for x in ids if isinstance(x, str) and x.strip()]
+    if not ids:
+        return {"ok": True, "deleted": 0}
+    conn = _db(db_path)
+    cur = conn.execute("DELETE FROM memory_v2 WHERE id IN (%s)" % ",".join(["?"] * len(ids)), tuple(ids))
+    conn.commit()
+    deleted = int(getattr(cur, "rowcount", 0) or 0)
+    conn.close()
+    return {"ok": True, "deleted": deleted}

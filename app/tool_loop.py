@@ -15,6 +15,7 @@ async def tool_loop(
     backend: Literal["ollama", "mlx"],
     model_name: str,
     max_steps: int = 8,
+    allowed_tools: set[str] | None = None,
 ) -> Dict[str, Any]:
     req = initial_req
     for _ in range(max_steps):
@@ -37,7 +38,7 @@ async def tool_loop(
             fn = (tc or {}).get("function") or {}
             name = fn.get("name")
             arguments = fn.get("arguments", "")
-            result = run_tool_call(name, arguments)
+            result = run_tool_call(name, arguments, allowed_tools=allowed_tools)
             new_messages.append(ChatMessage(role="tool", tool_call_id=tc.get("id"), content=json.dumps(result)))
 
         req = ChatCompletionRequest(

@@ -13,6 +13,8 @@ import time
 from typing import Any, Dict
 from pathlib import Path
 from urllib.parse import urlparse
+import platform
+import sys
 
 try:
     import resource  # type: ignore
@@ -35,6 +37,8 @@ log = logging.getLogger(__name__)
 
 
 from app import metrics
+from app import memory_v2
+from app.upstreams import embed_text_for_memory
 
 
 _REGISTRY_CACHE: dict[str, Any] = {"path": None, "mtime": None, "tools": {}}
@@ -200,12 +204,21 @@ def _bearer_token(req: Request) -> str:
     return auth.split(" ", 1)[1].strip()
 
 
+def _token_policy(req: Request) -> dict:
+    try:
+        pol = getattr(req.state, "token_policy", None)
+        return pol if isinstance(pol, dict) else {}
+    except Exception:
+        return {}
+
+
 def _rate_limit(req: Request) -> None:
     """Optional token-bucket rate limit for /v1/tools endpoints."""
 
     try:
-        rps = float(getattr(S, "TOOLS_RATE_LIMIT_RPS", 0.0) or 0.0)
-        burst = int(getattr(S, "TOOLS_RATE_LIMIT_BURST", 0) or 0)
+        pol = _token_policy(req)
+        rps = float(pol.get("tools_rate_limit_rps", getattr(S, "TOOLS_RATE_LIMIT_RPS", 0.0)) or 0.0)
+        burst = int(pol.get("tools_rate_limit_burst", getattr(S, "TOOLS_RATE_LIMIT_BURST", 0)) or 0)
     except Exception:
         rps = 0.0
         burst = 0
@@ -740,6 +753,72 @@ def tool_http_fetch(args: Dict[str, Any]) -> Dict[str, Any]:
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
 
+def tool_http_fetch_local(args: Dict[str, Any]) -> Dict[str, Any]:
+    """Fetch a URL via GET, hard-restricted to localhost.
+
+    This is a safer variant for internal self-checks (e.g. fetching /health).
+    """
+
+    url = args.get("url")
+    if not isinstance(url, str) or not url.strip():
+        return {"ok": False, "error": "url must be a non-empty string"}
+
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"}:
+        return {"ok": False, "error": "only http/https URLs are allowed"}
+
+    host = (parsed.hostname or "").strip().lower()
+    if host not in {"127.0.0.1", "localhost", "::1"}:
+        return {"ok": False, "error": f"host not allowed: {host}"}
+
+    # Delegate to the main implementation (which enforces GET + size limits).
+    return tool_http_fetch(args)
+
+
+def tool_system_info(args: Dict[str, Any]) -> Dict[str, Any]:
+    if not getattr(S, "TOOLS_ALLOW_SYSTEM_INFO", False):
+        return {"ok": False, "error": "system_info tool disabled"}
+    return {
+        "ok": True,
+        "python": sys.version.split("\n", 1)[0],
+        "platform": platform.platform(),
+        "pid": os.getpid(),
+        "cwd": os.getcwd(),
+        "features": {
+            "tools_allow_shell": bool(S.TOOLS_ALLOW_SHELL),
+            "tools_allow_fs": bool(S.TOOLS_ALLOW_FS),
+            "tools_allow_http_fetch": bool(S.TOOLS_ALLOW_HTTP_FETCH),
+            "tools_allow_git": bool(S.TOOLS_ALLOW_GIT),
+        },
+    }
+
+
+def tool_models_refresh(args: Dict[str, Any]) -> Dict[str, Any]:
+    if not getattr(S, "TOOLS_ALLOW_MODELS_REFRESH", False):
+        return {"ok": False, "error": "models_refresh tool disabled"}
+
+    out: Dict[str, Any] = {"ok": True, "upstreams": {}}
+    timeout = float(getattr(S, "TOOLS_HTTP_TIMEOUT_SEC", 10))
+    try:
+        with httpx.Client(timeout=timeout) as client:
+            try:
+                r = client.get(f"{S.OLLAMA_BASE_URL}/api/tags")
+                out["upstreams"]["ollama"] = {"ok": r.status_code == 200, "status": r.status_code}
+            except Exception as e:
+                out["ok"] = False
+                out["upstreams"]["ollama"] = {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+            try:
+                r = client.get(f"{S.MLX_BASE_URL}/models")
+                out["upstreams"]["mlx"] = {"ok": r.status_code == 200, "status": r.status_code}
+            except Exception as e:
+                out["ok"] = False
+                out["upstreams"]["mlx"] = {"ok": False, "error": f"{type(e).__name__}: {e}"}
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+    return out
+
+
 def tool_git(args: Dict[str, Any]) -> Dict[str, Any]:
     if not S.TOOLS_ALLOW_GIT:
         return {"ok": False, "error": "git tool disabled"}
@@ -800,27 +879,95 @@ TOOL_IMPL = {
     "read_file": tool_read_file,
     "write_file": tool_write_file,
     "http_fetch": tool_http_fetch,
+    "http_fetch_local": tool_http_fetch_local,
     "git": tool_git,
+    "system_info": tool_system_info,
+    "models_refresh": tool_models_refresh,
+    "memory_v2_upsert": lambda args: memory_v2.upsert(
+        db_path=S.MEMORY_DB_PATH,
+        embed=embed_text_for_memory,
+        text=str(args.get("text") or ""),
+        mtype=str(args.get("type") or "fact"),
+        source=str(args.get("source") or "user"),
+        meta=args.get("meta") if isinstance(args.get("meta"), dict) else None,
+        mid=str(args.get("id") or "") or None,
+        ts=int(args.get("ts")) if args.get("ts") is not None else None,
+    ),
+    "memory_v2_search": lambda args: memory_v2.search(
+        db_path=S.MEMORY_DB_PATH,
+        embed=embed_text_for_memory,
+        query=str(args.get("query") or ""),
+        k=int(args.get("top_k") or 6),
+        min_sim=float(args.get("min_sim") or 0.25),
+        types=args.get("types") if isinstance(args.get("types"), list) else None,
+        sources=args.get("sources") if isinstance(args.get("sources"), list) else None,
+        max_age_sec=int(args.get("max_age_sec")) if args.get("max_age_sec") is not None else None,
+        include_compacted=bool(args.get("include_compacted") or False),
+    ),
+    "memory_v2_list": lambda args: memory_v2.list_items(
+        db_path=S.MEMORY_DB_PATH,
+        types=args.get("types") if isinstance(args.get("types"), list) else None,
+        sources=args.get("sources") if isinstance(args.get("sources"), list) else None,
+        since_ts=int(args.get("since_ts")) if args.get("since_ts") is not None else None,
+        max_age_sec=int(args.get("max_age_sec")) if args.get("max_age_sec") is not None else None,
+        limit=int(args.get("limit") or 50),
+        include_compacted=bool(args.get("include_compacted") or False),
+    ),
+    "memory_v2_delete": lambda args: memory_v2.delete_items(
+        db_path=S.MEMORY_DB_PATH,
+        ids=args.get("ids") if isinstance(args.get("ids"), list) else [],
+    ),
 }
 
 
-def _allowed_tool_names() -> set[str]:
-    raw = (S.TOOLS_ALLOWLIST or "").strip()
+def allowed_tool_names_for_policy(policy: dict | None) -> set[str]:
+    pol = policy if isinstance(policy, dict) else {}
+
+    raw = (pol.get("tools_allowlist") or S.TOOLS_ALLOWLIST or "").strip()
     if raw:
         return {p.strip() for p in raw.split(",") if p.strip()}
 
     allowed: set[str] = set()
     # Always-available safe tool for verification.
     allowed.add("noop")
-    if S.TOOLS_ALLOW_SHELL:
+
+    allow_shell = bool(pol.get("tools_allow_shell", S.TOOLS_ALLOW_SHELL))
+    allow_fs = bool(pol.get("tools_allow_fs", S.TOOLS_ALLOW_FS))
+    allow_http = bool(pol.get("tools_allow_http_fetch", S.TOOLS_ALLOW_HTTP_FETCH))
+    allow_git = bool(pol.get("tools_allow_git", S.TOOLS_ALLOW_GIT))
+
+    if allow_shell:
         allowed.add("shell")
-    if S.TOOLS_ALLOW_FS:
+    if allow_fs:
         allowed.update({"read_file", "write_file"})
-    if S.TOOLS_ALLOW_HTTP_FETCH:
+    if allow_http:
         allowed.add("http_fetch")
-    if S.TOOLS_ALLOW_GIT:
+        allowed.add("http_fetch_local")
+    if allow_git:
         allowed.add("git")
+
+    if bool(pol.get("tools_allow_system_info", getattr(S, "TOOLS_ALLOW_SYSTEM_INFO", False))):
+        allowed.add("system_info")
+    if bool(pol.get("tools_allow_models_refresh", getattr(S, "TOOLS_ALLOW_MODELS_REFRESH", False))):
+        allowed.add("models_refresh")
     return allowed
+
+
+def _allowed_tool_names() -> set[str]:
+    """Default/global allowlist.
+
+    Kept as a stable seam for tests (monkeypatch) and internal callers that
+    don't have request context.
+    """
+
+    return allowed_tool_names_for_policy(None)
+
+
+def _allowed_tool_names_for_req(req: Request) -> set[str]:
+    pol = _token_policy(req)
+    if not pol:
+        return _allowed_tool_names()
+    return allowed_tool_names_for_policy(pol)
 
 
 def is_tool_allowed(name: str) -> bool:
@@ -898,10 +1045,115 @@ TOOL_SCHEMAS: Dict[str, Dict[str, Any]] = {
             "additionalProperties": False,
         },
     },
+    "http_fetch_local": {
+        "name": "http_fetch_local",
+        "version": "1",
+        "description": "Fetch a URL via GET, restricted to localhost only.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string"},
+                "method": {"type": "string", "enum": ["GET"]},
+                "headers": {"type": "object", "additionalProperties": {"type": "string"}},
+            },
+            "required": ["url"],
+            "additionalProperties": False,
+        },
+    },
+    "system_info": {
+        "name": "system_info",
+        "version": "1",
+        "description": "Return non-sensitive runtime and feature information.",
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": False,
+        },
+    },
+    "models_refresh": {
+        "name": "models_refresh",
+        "version": "1",
+        "description": "Ping upstream model endpoints to confirm reachability.",
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": False,
+        },
+    },
+    "memory_v2_upsert": {
+        "name": "memory_v2_upsert",
+        "version": "1",
+        "description": "Upsert a memory v2 item (typed, embedded, stored in SQLite).",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "type": {"type": "string", "enum": ["fact", "preference", "project", "ephemeral"]},
+                "text": {"type": "string"},
+                "source": {"type": "string", "enum": ["user", "system", "tool"]},
+                "meta": {"type": "object"},
+                "id": {"type": "string"},
+                "ts": {"type": "integer"},
+            },
+            "required": ["type", "text"],
+            "additionalProperties": False,
+        },
+    },
+    "memory_v2_search": {
+        "name": "memory_v2_search",
+        "version": "1",
+        "description": "Semantic search memory v2 by query embedding.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "top_k": {"type": "integer"},
+                "min_sim": {"type": "number"},
+                "types": {"type": "array", "items": {"type": "string"}},
+                "sources": {"type": "array", "items": {"type": "string"}},
+                "max_age_sec": {"type": "integer"},
+                "include_compacted": {"type": "boolean"},
+            },
+            "required": ["query"],
+            "additionalProperties": False,
+        },
+    },
+    "memory_v2_list": {
+        "name": "memory_v2_list",
+        "version": "1",
+        "description": "List memory v2 items with optional filters.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "types": {"type": "array", "items": {"type": "string"}},
+                "sources": {"type": "array", "items": {"type": "string"}},
+                "since_ts": {"type": "integer"},
+                "max_age_sec": {"type": "integer"},
+                "limit": {"type": "integer"},
+                "include_compacted": {"type": "boolean"},
+            },
+            "required": [],
+            "additionalProperties": False,
+        },
+    },
+    "memory_v2_delete": {
+        "name": "memory_v2_delete",
+        "version": "1",
+        "description": "Delete memory v2 items by id.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "ids": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["ids"],
+            "additionalProperties": False,
+        },
+    },
 }
 
 
-def run_tool_call(name: str, arguments_json: str) -> Dict[str, Any]:
+def run_tool_call(name: str, arguments_json: str, *, allowed_tools: set[str] | None = None) -> Dict[str, Any]:
     if not isinstance(name, str) or not name.strip():
         return {
             "ok": False,
@@ -911,7 +1163,15 @@ def run_tool_call(name: str, arguments_json: str) -> Dict[str, Any]:
         }
     name = name.strip()
 
-    if not is_tool_allowed(name):
+    if allowed_tools is not None:
+        if name not in allowed_tools:
+            return {
+                "ok": False,
+                "error": f"unknown tool: {name}",
+                "error_type": "unknown_tool",
+                "error_message": f"unknown tool: {name}",
+            }
+    elif not is_tool_allowed(name):
         # Fail closed, and avoid revealing undeclared tools.
         return {
             "ok": False,
@@ -940,7 +1200,7 @@ def run_tool_call(name: str, arguments_json: str) -> Dict[str, Any]:
 
     try:
         # Delegate to the same deterministic executor used by /v1/tools.
-        return _execute_tool(name, args)
+        return _execute_tool(name, args, allowed_tools=allowed_tools)
     except HTTPException as e:
         detail = e.detail
         if isinstance(detail, dict):
@@ -970,7 +1230,7 @@ def run_tool_call(name: str, arguments_json: str) -> Dict[str, Any]:
         }
 
 
-def _execute_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
+def _execute_tool(name: str, args: Dict[str, Any], *, allowed_tools: set[str] | None = None) -> Dict[str, Any]:
     """Execute a tool with validation + replay ID + deterministic logging."""
 
     sem = _tools_concurrency_sem()
@@ -995,7 +1255,12 @@ def _execute_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
             },
         )
 
-    if not is_tool_allowed(name):
+    if allowed_tools is not None:
+        allowed = name in allowed_tools
+    else:
+        allowed = is_tool_allowed(name)
+
+    if not allowed:
         # Fail closed, and avoid revealing undeclared tools.
         raise HTTPException(
             status_code=404,
@@ -1153,7 +1418,7 @@ def _execute_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
 async def v1_tools_list(req: Request):
     require_bearer(req)
     _rate_limit(req)
-    allowed = sorted(_allowed_tool_names())
+    allowed = sorted(_allowed_tool_names_for_req(req))
     data = []
     for name in allowed:
         sch, _reg_def, src = _resolve_declared_tool(name)
@@ -1287,7 +1552,7 @@ async def v1_tools_dispatch(req: Request):
                 "error_message": "arguments must be an object",
             },
         )
-    return _execute_tool(name.strip(), args)
+    return _execute_tool(name.strip(), args, allowed_tools=_allowed_tool_names_for_req(req))
 
 
 @router.post("/v1/tools/{name}")
@@ -1296,4 +1561,4 @@ async def v1_tools_exec(req: Request, name: str):
     _rate_limit(req)
     body = await req.json()
     tr = ToolExecRequest(**body)
-    return _execute_tool(name, tr.arguments)
+    return _execute_tool(name, tr.arguments, allowed_tools=_allowed_tool_names_for_req(req))

@@ -23,6 +23,7 @@ from app.model_aliases import get_aliases
 from app.router import decide_route
 from app.router_cfg import router_cfg
 from app.tool_loop import tool_loop
+from app.tools_bus import allowed_tool_names_for_policy
 from app.upstreams import (
     call_mlx_openai,
     call_ollama,
@@ -153,7 +154,15 @@ async def chat_completions(req: Request):
     require_bearer(req)
     body = await req.json()
     cc = ChatCompletionRequest(**body)
-    cc.messages = await inject_memory(cc.messages)
+    cc.messages = await inject_memory(cc.messages, req=req)
+
+    allowed_tools = None
+    try:
+        pol = getattr(req.state, "token_policy", None)
+        if isinstance(pol, dict):
+            allowed_tools = allowed_tool_names_for_policy(pol)
+    except Exception:
+        allowed_tools = None
 
     hdrs = {k.lower(): v for k, v in req.headers.items()}
     route = decide_route(
@@ -227,7 +236,7 @@ async def chat_completions(req: Request):
 
     t0 = time.monotonic()
     if cc.tools:
-        resp = await tool_loop(cc, backend, model_name)
+        resp = await tool_loop(cc, backend, model_name, allowed_tools=allowed_tools)
     else:
         resp = await (call_mlx_openai(cc_routed) if backend == "mlx" else call_ollama(cc, model_name))
     try:
@@ -455,3 +464,175 @@ async def embeddings(req: Request):
         "data": [{"object": "embedding", "index": i, "embedding": embs[i]} for i in range(len(embs))],
         "model": model,
     }
+
+
+@router.post("/v1/responses")
+async def responses(req: Request):
+    """Minimal OpenAI Responses API compatibility layer (non-stream).
+
+    This maps a Responses-style request onto the existing chat completion path.
+    """
+
+    require_bearer(req)
+    body = await req.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="body must be an object")
+
+    model = body.get("model")
+    if not isinstance(model, str) or not model.strip():
+        raise HTTPException(status_code=400, detail="model must be a non-empty string")
+
+    stream = bool(body.get("stream") or False)
+
+    temperature = body.get("temperature")
+    max_tokens = body.get("max_output_tokens")
+    if max_tokens is None:
+        max_tokens = body.get("max_tokens")
+
+    raw_input = body.get("input")
+    messages: list[ChatMessage] = []
+    if isinstance(raw_input, str):
+        messages = [ChatMessage(role="user", content=raw_input)]
+    elif isinstance(raw_input, list) and raw_input and all(isinstance(x, dict) for x in raw_input):
+        # Best-effort: treat as chat-style messages.
+        messages = [ChatMessage(**x) for x in raw_input]  # type: ignore[arg-type]
+    elif raw_input is None:
+        # Some clients send chat-style messages under `messages`.
+        raw_messages = body.get("messages")
+        if isinstance(raw_messages, list) and raw_messages and all(isinstance(x, dict) for x in raw_messages):
+            messages = [ChatMessage(**x) for x in raw_messages]  # type: ignore[arg-type]
+        else:
+            raise HTTPException(status_code=400, detail="input is required")
+    else:
+        raise HTTPException(status_code=400, detail="input must be a string or list of message objects")
+
+    tools = body.get("tools")
+
+    cc = ChatCompletionRequest(
+        model=model,
+        messages=messages,
+        tools=tools,
+        tool_choice=body.get("tool_choice"),
+        temperature=float(temperature) if temperature is not None else None,
+        max_tokens=int(max_tokens) if max_tokens is not None else None,
+        stream=False,
+    )
+    cc.messages = await inject_memory(cc.messages, req=req)
+
+    if stream and cc.tools:
+        raise HTTPException(status_code=400, detail="stream=true not supported when tools are provided")
+
+    hdrs = {k.lower(): v for k, v in req.headers.items()}
+    route = decide_route(
+        cfg=router_cfg(),
+        request_model=cc.model,
+        headers=hdrs,
+        messages=[m.model_dump(exclude_none=True) for m in cc.messages],
+        has_tools=bool(cc.tools),
+        enable_policy=S.ROUTER_ENABLE_POLICY,
+    )
+    backend: Literal["ollama", "mlx"] = route.backend
+    model_name = route.model
+
+    alias_name = _selected_alias_name(cc.model, route.reason)
+    cc = _apply_alias_constraints(cc, alias_name=alias_name)
+
+    if stream:
+        response_id = new_id("resp")
+        created = now_unix()
+
+        if backend == "mlx":
+            payload = cc.model_dump(exclude_none=True)
+            payload["model"] = model_name
+            payload["stream"] = True
+            upstream_gen = stream_mlx_openai_chat(payload)
+        else:
+            # Uses the existing OpenAI-ish chat SSE stream.
+            upstream_gen = stream_ollama_chat_as_openai(cc, model_name)
+
+        async def gen() -> AsyncIterator[bytes]:
+            # Best-effort Responses API SSE.
+            yield (
+                f"data: {json.dumps({'type':'response.created','response':{'id':response_id,'object':'response','created':created,'model':model_name}}, separators=(',', ':'))}\n\n"
+            ).encode("utf-8")
+
+            async for chunk in upstream_gen:
+                for line in chunk.splitlines():
+                    if not line.startswith(b"data:"):
+                        continue
+                    data = line[len(b"data:") :].strip()
+                    if data == b"[DONE]":
+                        yield (
+                            f"data: {json.dumps({'type':'response.completed','response':{'id':response_id}}, separators=(',', ':'))}\n\n"
+                        ).encode("utf-8")
+                        yield sse_done()
+                        return
+                    try:
+                        j = json.loads(data)
+                    except Exception:
+                        continue
+                    delta = (((j or {}).get("choices") or [{}])[0].get("delta") or {})
+                    text = delta.get("content")
+                    if isinstance(text, str) and text:
+                        yield (
+                            f"data: {json.dumps({'type':'response.output_text.delta','delta':text}, separators=(',', ':'))}\n\n"
+                        ).encode("utf-8")
+
+            yield (
+                f"data: {json.dumps({'type':'response.completed','response':{'id':response_id}}, separators=(',', ':'))}\n\n"
+            ).encode("utf-8")
+            yield sse_done()
+
+        out = StreamingResponse(gen(), media_type="text/event-stream")
+        out.headers["X-Backend-Used"] = backend
+        out.headers["X-Model-Used"] = model_name
+        out.headers["X-Router-Reason"] = route.reason
+        return out
+
+    if cc.tools:
+        allowed_tools = None
+        try:
+            pol = getattr(req.state, "token_policy", None)
+            if isinstance(pol, dict):
+                allowed_tools = allowed_tool_names_for_policy(pol)
+        except Exception:
+            allowed_tools = None
+        chat_resp = await tool_loop(cc, backend, model_name, allowed_tools=allowed_tools)
+    else:
+        cc_routed = ChatCompletionRequest(
+            model=model_name if backend == "mlx" else cc.model,
+            messages=cc.messages,
+            tools=cc.tools,
+            tool_choice=cc.tool_choice,
+            temperature=cc.temperature,
+            max_tokens=cc.max_tokens,
+            stream=False,
+        )
+        chat_resp = await (call_mlx_openai(cc_routed) if backend == "mlx" else call_ollama(cc, model_name))
+
+    msg = ((chat_resp.get("choices") or [{}])[0].get("message") or {})
+    text = msg.get("content")
+    if not isinstance(text, str):
+        text = ""
+
+    out = {
+        "id": new_id("resp"),
+        "object": "response",
+        "created": now_unix(),
+        "model": model_name,
+        "output": [
+            {
+                "type": "message",
+                "id": new_id("msg"),
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": text}],
+            }
+        ],
+        "usage": chat_resp.get("usage") or {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+    }
+
+    resp = JSONResponse(out)
+    resp.headers["X-Backend-Used"] = backend
+    resp.headers["X-Model-Used"] = model_name
+    resp.headers["X-Router-Reason"] = route.reason
+    return resp

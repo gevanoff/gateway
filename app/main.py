@@ -17,6 +17,7 @@ from app.memory_routes import router as memory_router
 from app.openai_routes import router as openai_router
 from app.model_aliases import get_aliases
 from app.tools_bus import router as tools_router
+from app.agent_routes import router as agent_router
 from app import memory_v2
 from app import metrics
 
@@ -60,6 +61,53 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="Local AI Gateway", version="0.1", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def guard_requests(req: Request, call_next):
+    try:
+        max_bytes = int(getattr(S, "MAX_REQUEST_BYTES", 0) or 0)
+    except Exception:
+        max_bytes = 0
+
+    # Optional per-token override from policy JSON.
+    try:
+        from app.auth import bearer_token_from_headers, token_policy_for_token
+
+        tok = bearer_token_from_headers(dict(req.headers))
+        if tok:
+            pol = token_policy_for_token(tok)
+            if isinstance(pol, dict) and pol.get("max_request_bytes") is not None:
+                try:
+                    max_bytes = int(pol.get("max_request_bytes") or 0)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+    if max_bytes > 0:
+        # Prefer content-length when present.
+        try:
+            cl = req.headers.get("content-length")
+            if cl is not None and int(cl) > max_bytes:
+                from fastapi.responses import PlainTextResponse
+
+                return PlainTextResponse("request too large", status_code=413)
+        except Exception:
+            pass
+
+        # If no content-length, fall back to reading body for typical body methods.
+        if req.method.upper() in {"POST", "PUT", "PATCH"}:
+            try:
+                body = await req.body()
+                if body is not None and len(body) > max_bytes:
+                    from fastapi.responses import PlainTextResponse
+
+                    return PlainTextResponse("request too large", status_code=413)
+            except Exception:
+                pass
+
+    return await call_next(req)
 
 
 @app.middleware("http")
@@ -162,3 +210,4 @@ app.include_router(health_router)
 app.include_router(openai_router)
 app.include_router(memory_router)
 app.include_router(tools_router)
+app.include_router(agent_router)
