@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import json
@@ -45,6 +46,34 @@ _REGISTRY_CACHE: dict[str, Any] = {"path": None, "mtime": None, "tools": {}}
 
 
 _TOOLS_CONCURRENCY_SEM: threading.Semaphore | None = None
+
+
+def _run_coroutine_sync(coro: Any) -> Any:
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+
+    result: Any = None
+    error: Exception | None = None
+
+    def runner() -> None:
+        nonlocal result, error
+        try:
+            result = asyncio.run(coro)
+        except Exception as exc:
+            error = exc
+
+    thread = threading.Thread(target=runner, daemon=True)
+    thread.start()
+    thread.join()
+    if error is not None:
+        raise error
+    return result
+
+
+def _embed_text_sync(text: str) -> list[float]:
+    return _run_coroutine_sync(embed_text_for_memory(text))
 
 
 def _tools_concurrency_sem() -> threading.Semaphore:
@@ -685,7 +714,7 @@ def tool_write_file(args: Dict[str, Any]) -> Dict[str, Any]:
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
 
-def tool_http_fetch(args: Dict[str, Any]) -> Dict[str, Any]:
+def tool_http_fetch(args: Dict[str, Any], *, override_allowed_hosts: set[str] | None = None) -> Dict[str, Any]:
     if not S.TOOLS_ALLOW_HTTP_FETCH:
         return {"ok": False, "error": "http_fetch tool disabled"}
 
@@ -705,7 +734,11 @@ def tool_http_fetch(args: Dict[str, Any]) -> Dict[str, Any]:
     if not host:
         return {"ok": False, "error": "url must include a hostname"}
 
-    allowed_hosts = {h.strip().lower() for h in (S.TOOLS_HTTP_ALLOWED_HOSTS or "").split(",") if h.strip()}
+    allowed_hosts = (
+        {h.strip().lower() for h in (S.TOOLS_HTTP_ALLOWED_HOSTS or "").split(",") if h.strip()}
+        if override_allowed_hosts is None
+        else override_allowed_hosts
+    )
     if host not in allowed_hosts:
         return {"ok": False, "error": f"host not allowed: {host}"}
 
@@ -772,7 +805,7 @@ def tool_http_fetch_local(args: Dict[str, Any]) -> Dict[str, Any]:
         return {"ok": False, "error": f"host not allowed: {host}"}
 
     # Delegate to the main implementation (which enforces GET + size limits).
-    return tool_http_fetch(args)
+    return tool_http_fetch(args, override_allowed_hosts={"127.0.0.1", "localhost", "::1"})
 
 
 def tool_system_info(args: Dict[str, Any]) -> Dict[str, Any]:
@@ -885,7 +918,7 @@ TOOL_IMPL = {
     "models_refresh": tool_models_refresh,
     "memory_v2_upsert": lambda args: memory_v2.upsert(
         db_path=S.MEMORY_DB_PATH,
-        embed=embed_text_for_memory,
+        embed=_embed_text_sync,
         text=str(args.get("text") or ""),
         mtype=str(args.get("type") or "fact"),
         source=str(args.get("source") or "user"),
@@ -895,7 +928,7 @@ TOOL_IMPL = {
     ),
     "memory_v2_search": lambda args: memory_v2.search(
         db_path=S.MEMORY_DB_PATH,
-        embed=embed_text_for_memory,
+        embed=_embed_text_sync,
         query=str(args.get("query") or ""),
         k=int(args.get("top_k") or 6),
         min_sim=float(args.get("min_sim") or 0.25),
