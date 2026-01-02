@@ -38,11 +38,14 @@ class Settings(BaseSettings):
     # Images (text-to-image)
     # Default backend is "mock" which returns an SVG placeholder.
     # Set IMAGES_BACKEND=http_a1111 and IMAGES_HTTP_BASE_URL=http://127.0.0.1:7860 to use Automatic1111's API.
-    IMAGES_BACKEND: Literal["mock", "http_a1111"] = "mock"
+    # Set IMAGES_BACKEND=http_openai_images and IMAGES_HTTP_BASE_URL=http://127.0.0.1:18181 to use an OpenAI-style
+    # image server (e.g., Nexa exposing POST /v1/images/generations).
+    IMAGES_BACKEND: Literal["mock", "http_a1111", "http_openai_images"] = "mock"
     IMAGES_HTTP_BASE_URL: str = "http://127.0.0.1:7860"
     IMAGES_HTTP_TIMEOUT_SEC: float = 120.0
     IMAGES_A1111_STEPS: int = 20
     IMAGES_MAX_PIXELS: int = 2_000_000
+    IMAGES_OPENAI_MODEL: str = ""
 
     DEFAULT_BACKEND: Literal["ollama", "mlx"] = "ollama"
 

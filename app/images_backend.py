@@ -53,12 +53,19 @@ def _mock_svg(prompt: str, width: int, height: int) -> bytes:
     return svg.encode("utf-8")
 
 
-async def generate_images(*, prompt: str, size: str = "1024x1024", n: int = 1) -> Dict[str, Any]:
+async def generate_images(
+    *,
+    prompt: str,
+    size: str = "1024x1024",
+    n: int = 1,
+    model: str | None = None,
+) -> Dict[str, Any]:
     """Generate images in an OpenAI-ish response shape.
 
-    Backends:
-      - mock: returns a placeholder SVG (always available)
-      - http_a1111: proxies to an Automatic1111-compatible API (txt2img)
+        Backends:
+            - mock: returns a placeholder SVG (always available)
+            - http_a1111: proxies to an Automatic1111-compatible API (txt2img)
+            - http_openai_images: proxies to an OpenAI-style images server (POST /v1/images/generations)
     """
 
     n = int(n or 1)
@@ -95,6 +102,46 @@ async def generate_images(*, prompt: str, size: str = "1024x1024", n: int = 1) -
         resp: Dict[str, Any] = {"created": int(time.time()), "data": data}
         resp["_gateway"] = {"backend": backend, "mime": "image/png"}
         return resp
+
+    if backend == "http_openai_images":
+        base = (getattr(S, "IMAGES_HTTP_BASE_URL", "") or "").strip().rstrip("/")
+        if not base:
+            raise RuntimeError("IMAGES_HTTP_BASE_URL is required for http_openai_images")
+
+        timeout = float(getattr(S, "IMAGES_HTTP_TIMEOUT_SEC", 120.0) or 120.0)
+        chosen_model = (model or "").strip() or (getattr(S, "IMAGES_OPENAI_MODEL", "") or "").strip()
+        if not chosen_model:
+            raise RuntimeError("model is required for http_openai_images (set IMAGES_OPENAI_MODEL or pass model)")
+
+        payload: Dict[str, Any] = {
+            "model": chosen_model,
+            "prompt": prompt,
+            "n": n,
+            "size": f"{width}x{height}",
+            "response_format": "b64_json",
+        }
+
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            r = await client.post(f"{base}/v1/images/generations", json=payload)
+            r.raise_for_status()
+            out = r.json()
+
+        data = out.get("data") if isinstance(out, dict) else None
+        if not (isinstance(data, list) and data and all(isinstance(x, dict) for x in data)):
+            raise RuntimeError("unexpected response from image backend")
+
+        # Normalize to OpenAI-ish shape with b64_json.
+        normalized: List[Dict[str, Any]] = []
+        for item in data[:n]:
+            b64 = item.get("b64_json")
+            if isinstance(b64, str) and b64:
+                normalized.append({"b64_json": b64})
+        if not normalized:
+            raise RuntimeError("image backend did not return b64_json")
+
+        resp2: Dict[str, Any] = {"created": int(out.get("created") or time.time()), "data": normalized}
+        resp2["_gateway"] = {"backend": backend, "mime": "image/png", "model": chosen_model}
+        return resp2
 
     # Default: mock
     svg_bytes = _mock_svg(prompt, width, height)

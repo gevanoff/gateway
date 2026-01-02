@@ -22,9 +22,15 @@ async def images_generations(req: Request):
 
     n = body.get("n", 1)
     size = body.get("size", "1024x1024")
+    model = body.get("model")
 
     try:
-        return await generate_images(prompt=prompt, size=str(size), n=int(n))
+        return await generate_images(
+            prompt=prompt,
+            size=str(size),
+            n=int(n),
+            model=str(model) if isinstance(model, str) and model.strip() else None,
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:

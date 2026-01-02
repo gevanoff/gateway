@@ -2,6 +2,42 @@
 
 FastAPI “Local AI Gateway” exposing OpenAI-ish endpoints and an internal tool bus.
 
+## Images (text-to-image)
+
+The gateway can expose an OpenAI-ish images endpoint:
+
+- `POST /v1/images/generations` (bearer-protected)
+
+Backends:
+
+- `IMAGES_BACKEND=mock` (default): returns a deterministic SVG placeholder.
+- `IMAGES_BACKEND=http_a1111`: proxies to an Automatic1111-compatible server (`/sdapi/v1/txt2img`).
+- `IMAGES_BACKEND=http_openai_images`: proxies to an OpenAI-style images server (`POST /v1/images/generations`) such as Nexa.
+
+Minimal config (A1111 running locally on the same host as the gateway):
+
+- `IMAGES_BACKEND=http_a1111`
+- `IMAGES_HTTP_BASE_URL=http://127.0.0.1:7860`
+
+Notes:
+
+- A1111 must be started with `--api` so `/sdapi/v1/txt2img` is available.
+- A1111 typically has no auth; keep it bound to localhost or protect it with firewall/SSH tunnel.
+
+Smoke test (bearer-protected):
+
+- `python tools/verify_images.py --gateway-base-url http://127.0.0.1:8800 --token <token> --also-check-a1111 http://127.0.0.1:7860`
+
+Smoke test (Nexa / OpenAI-style images server):
+
+- `python tools/verify_images.py --also-check-openai-images http://127.0.0.1:18181 --openai-images-model NexaAI/sdxl-turbo`
+
+Nexa-through-gateway config (Nexa running locally on the same host as the gateway):
+
+- `IMAGES_BACKEND=http_openai_images`
+- `IMAGES_HTTP_BASE_URL=http://127.0.0.1:18181`
+- `IMAGES_OPENAI_MODEL=NexaAI/sdxl-turbo` (so the UI can omit `model`)
+
 ## Tool bus (high level)
 
 - List tools: `GET /v1/tools`

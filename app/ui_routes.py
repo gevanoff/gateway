@@ -193,9 +193,15 @@ async def ui_image(req: Request) -> Dict[str, Any]:
 
     size = str(body.get("size") or "1024x1024")
     n = int(body.get("n") or 1)
+    model = body.get("model")
 
     try:
-        return await generate_images(prompt=prompt, size=size, n=n)
+        return await generate_images(
+            prompt=prompt,
+            size=size,
+            n=n,
+            model=str(model) if isinstance(model, str) and model.strip() else None,
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
