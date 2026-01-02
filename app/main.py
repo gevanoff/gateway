@@ -5,6 +5,7 @@ import time
 
 from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse
+from fastapi.staticfiles import StaticFiles
 
 import httpx
 
@@ -18,6 +19,7 @@ from app.openai_routes import router as openai_router
 from app.model_aliases import get_aliases
 from app.tools_bus import router as tools_router
 from app.agent_routes import router as agent_router
+from app.ui_routes import router as ui_router
 from app import memory_v2
 from app import metrics
 
@@ -61,6 +63,10 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="Local AI Gateway", version="0.1", lifespan=lifespan)
+
+
+# Minimal static UI assets (served without auth; API endpoints remain bearer-protected).
+app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
 
 @app.middleware("http")
@@ -211,3 +217,4 @@ app.include_router(openai_router)
 app.include_router(memory_router)
 app.include_router(tools_router)
 app.include_router(agent_router)
+app.include_router(ui_router)

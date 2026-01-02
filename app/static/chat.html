@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Gateway Chat UI</title>
+    <style>
+      :root { color-scheme: dark; }
+      body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; background: #0b0d10; color: #e7edf6; }
+      main { max-width: 980px; margin: 0 auto; padding: 16px; }
+      h1 { margin: 0 0 12px; font-size: 18px; font-weight: 650; }
+      .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+      label { display: block; font-size: 12px; color: #a9b4c3; margin: 0 0 6px; }
+      input, textarea { width: 100%; box-sizing: border-box; padding: 10px; border-radius: 10px; border: 1px solid rgba(231,237,246,0.12); background: #12161c; color: #e7edf6; }
+      textarea { min-height: 88px; resize: vertical; }
+      button { padding: 10px 12px; border-radius: 10px; border: 1px solid rgba(231,237,246,0.14); background: #12161c; color: #e7edf6; cursor: pointer; }
+      button:disabled { opacity: 0.6; cursor: default; }
+      .actions { display: flex; gap: 10px; align-items: center; margin-top: 10px; }
+      .hint { font-size: 12px; color: #a9b4c3; }
+      .log { margin-top: 14px; padding: 12px; border-radius: 12px; border: 1px solid rgba(231,237,246,0.12); background: #0e1217; white-space: pre-wrap; line-height: 1.5; }
+      .meta { margin-top: 10px; font-size: 12px; color: #a9b4c3; }
+      @media (max-width: 760px) { .row { grid-template-columns: 1fr; } }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Gateway chat</h1>
+
+      <div class="row">
+        <div>
+          <label for="token">Bearer token</label>
+          <input id="token" type="password" placeholder="GATEWAY_BEARER_TOKEN" autocomplete="off" />
+        </div>
+        <div>
+          <label for="model">Model</label>
+          <input id="model" type="text" value="fast" />
+          <div class="hint">Examples: <code>fast</code>, <code>coder</code>, <code>ollama:llama3.1</code>, <code>mlx:...</code></div>
+        </div>
+      </div>
+
+      <div style="margin-top:12px">
+        <label for="input">Message</label>
+        <textarea id="input" placeholder="Type a message"></textarea>
+
+        <div class="actions">
+          <button id="send">Send</button>
+          <button id="clear" type="button">Clear</button>
+          <span class="hint">Uses <code>/v1/chat/completions</code> (non-streaming).</span>
+        </div>
+      </div>
+
+      <div id="out" class="log" aria-live="polite"></div>
+      <div id="meta" class="meta"></div>
+    </main>
+
+    <script src="/static/chat.js"></script>
+  </body>
+</html>
