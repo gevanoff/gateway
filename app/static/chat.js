@@ -21,6 +21,85 @@
     metaEl.textContent = text || "";
   }
 
+  function _setModelOptions(modelIds, preferred) {
+    const prev = modelEl.value;
+    modelEl.innerHTML = "";
+
+    const ids = Array.isArray(modelIds) ? modelIds.filter((x) => typeof x === "string" && x.trim()) : [];
+    const unique = Array.from(new Set(ids));
+    unique.sort((a, b) => a.localeCompare(b));
+
+    for (const id of unique) {
+      const opt = document.createElement("option");
+      opt.value = id;
+      opt.textContent = id;
+      modelEl.appendChild(opt);
+    }
+
+    const want = (preferred || "").trim();
+    if (want && unique.includes(want)) {
+      modelEl.value = want;
+      return;
+    }
+    if (prev && unique.includes(prev)) {
+      modelEl.value = prev;
+      return;
+    }
+    if (unique.includes("fast")) {
+      modelEl.value = "fast";
+      return;
+    }
+    if (unique.length) {
+      modelEl.value = unique[0];
+    }
+  }
+
+  async function loadModels() {
+    const token = (tokenEl.value || "").trim();
+    if (!token) {
+      modelEl.innerHTML = "";
+      const opt = document.createElement("option");
+      opt.value = "fast";
+      opt.textContent = "fast";
+      modelEl.appendChild(opt);
+      modelEl.value = "fast";
+      return;
+    }
+
+    try {
+      setMeta("Loading models...");
+      const resp = await fetch("/v1/models", {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      const text = await resp.text();
+      if (!resp.ok) {
+        _setModelOptions(["fast"], "fast");
+        setMeta(`Models: HTTP ${resp.status}`);
+        return;
+      }
+
+      let payload;
+      try {
+        payload = JSON.parse(text);
+      } catch {
+        _setModelOptions(["fast"], "fast");
+        setMeta("Models: invalid JSON");
+        return;
+      }
+
+      const data = payload && Array.isArray(payload.data) ? payload.data : [];
+      const ids = data.map((m) => m && m.id).filter((x) => typeof x === "string");
+      _setModelOptions(ids, "fast");
+      setMeta(`Models loaded (${ids.length})`);
+    } catch (e) {
+      _setModelOptions(["fast"], "fast");
+      setMeta(`Models: ${String(e)}`);
+    }
+  }
+
   async function send() {
     const token = (tokenEl.value || "").trim();
     const model = (modelEl.value || "").trim() || "fast";
@@ -101,6 +180,10 @@
     }
   });
 
+  tokenEl.addEventListener("change", () => void loadModels());
+  tokenEl.addEventListener("blur", () => void loadModels());
+
   setOutput("Ready.");
   setMeta("Ctrl+Enter to send");
+  void loadModels();
 })();
