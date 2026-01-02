@@ -207,15 +207,26 @@
       }
 
       const b64 = payload?.data?.[0]?.b64_json;
+      const url = payload?.data?.[0]?.url;
       const mime = payload?._gateway?.mime || "image/png";
 
-      if (typeof b64 !== "string" || !b64) {
+      if (typeof url === "string" && url.trim()) {
+        const src = url.trim();
+        setImgOutputHtml(
+          `<img src="${src}" alt="generated" style="max-width:100%;height:auto;display:block;border-radius:12px;border:1px solid rgba(231,237,246,0.12)" />`
+        );
+        setImgMeta(payload?._gateway?.backend ? `backend=${payload._gateway.backend}` : "OK");
+        return;
+      }
+
+      if (typeof b64 !== "string" || !b64.trim()) {
         setImgOutputHtml(JSON.stringify(payload, null, 2));
         setImgMeta("OK (no image data)");
         return;
       }
 
-      const src = `data:${mime};base64,${b64}`;
+      const b64s = b64.trim();
+      const src = b64s.startsWith("data:") ? b64s : `data:${mime};base64,${b64s}`;
       setImgOutputHtml(`<img src="${src}" alt="generated" style="max-width:100%;height:auto;display:block;border-radius:12px;border:1px solid rgba(231,237,246,0.12)" />`);
       setImgMeta(payload?._gateway?.backend ? `backend=${payload._gateway.backend}` : "OK");
     } catch (e) {
