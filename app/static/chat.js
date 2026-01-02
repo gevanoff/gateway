@@ -163,10 +163,11 @@
   });
 
   inputEl.addEventListener("keydown", (e) => {
-    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
-      e.preventDefault();
-      void send();
-    }
+    if (e.key !== "Enter") return;
+    if (e.shiftKey) return; // allow newline
+    // Enter sends
+    e.preventDefault();
+    void send();
   });
 
   if (loadModelsEl) {
