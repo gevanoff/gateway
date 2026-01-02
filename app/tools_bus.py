@@ -714,7 +714,7 @@ def tool_write_file(args: Dict[str, Any]) -> Dict[str, Any]:
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
 
-def tool_http_fetch(args: Dict[str, Any]) -> Dict[str, Any]:
+def tool_http_fetch(args: Dict[str, Any], *, override_allowed_hosts: set[str] | None = None) -> Dict[str, Any]:
     if not S.TOOLS_ALLOW_HTTP_FETCH:
         return {"ok": False, "error": "http_fetch tool disabled"}
 
@@ -734,7 +734,11 @@ def tool_http_fetch(args: Dict[str, Any]) -> Dict[str, Any]:
     if not host:
         return {"ok": False, "error": "url must include a hostname"}
 
-    allowed_hosts = {h.strip().lower() for h in (S.TOOLS_HTTP_ALLOWED_HOSTS or "").split(",") if h.strip()}
+    allowed_hosts = (
+        {h.strip().lower() for h in (S.TOOLS_HTTP_ALLOWED_HOSTS or "").split(",") if h.strip()}
+        if override_allowed_hosts is None
+        else override_allowed_hosts
+    )
     if host not in allowed_hosts:
         return {"ok": False, "error": f"host not allowed: {host}"}
 
@@ -801,7 +805,7 @@ def tool_http_fetch_local(args: Dict[str, Any]) -> Dict[str, Any]:
         return {"ok": False, "error": f"host not allowed: {host}"}
 
     # Delegate to the main implementation (which enforces GET + size limits).
-    return tool_http_fetch(args)
+    return tool_http_fetch(args, override_allowed_hosts={"127.0.0.1", "localhost", "::1"})
 
 
 def tool_system_info(args: Dict[str, Any]) -> Dict[str, Any]:
