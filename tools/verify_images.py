@@ -19,7 +19,7 @@ def _http_json(
     headers: dict[str, str] | None = None,
     body: dict[str, Any] | None = None,
     timeout_sec: float = 60.0,
-    max_body_bytes: int = 500_000,
+    max_body_bytes: int = 20_000_000,
 ) -> tuple[int, dict[str, str], Any]:
     raw: bytes | None = None
     h = dict(headers or {})
