@@ -3,6 +3,7 @@
 
   const tokenEl = $("token");
   const modelEl = $("model");
+  const loadModelsEl = $("loadModels");
   const inputEl = $("input");
   const sendEl = $("send");
   const clearEl = $("clear");
@@ -54,6 +55,18 @@
     }
   }
 
+  let _modelsTimer = null;
+  function _scheduleLoadModels() {
+    if (_modelsTimer) {
+      clearTimeout(_modelsTimer);
+      _modelsTimer = null;
+    }
+    _modelsTimer = setTimeout(() => {
+      _modelsTimer = null;
+      void loadModels();
+    }, 250);
+  }
+
   async function loadModels() {
     const token = (tokenEl.value || "").trim();
     if (!token) {
@@ -63,6 +76,7 @@
       opt.textContent = "fast";
       modelEl.appendChild(opt);
       modelEl.value = "fast";
+      setMeta("Models: enter token, then Load models");
       return;
     }
 
@@ -78,6 +92,7 @@
       if (!resp.ok) {
         _setModelOptions(["fast"], "fast");
         setMeta(`Models: HTTP ${resp.status}`);
+        setOutput(text);
         return;
       }
 
@@ -180,8 +195,13 @@
     }
   });
 
-  tokenEl.addEventListener("change", () => void loadModels());
-  tokenEl.addEventListener("blur", () => void loadModels());
+  if (loadModelsEl) {
+    loadModelsEl.addEventListener("click", () => void loadModels());
+  }
+
+  tokenEl.addEventListener("change", _scheduleLoadModels);
+  tokenEl.addEventListener("blur", _scheduleLoadModels);
+  tokenEl.addEventListener("input", _scheduleLoadModels);
 
   setOutput("Ready.");
   setMeta("Ctrl+Enter to send");

@@ -30,6 +30,10 @@
         <div>
           <label for="token">Bearer token</label>
           <input id="token" type="password" placeholder="GATEWAY_BEARER_TOKEN" autocomplete="off" />
+          <div class="actions" style="margin-top:10px">
+            <button id="loadModels" type="button">Load models</button>
+            <span class="hint">Fetches <code>/v1/models</code> using this token.</span>
+          </div>
         </div>
         <div>
           <label for="model">Model</label>
