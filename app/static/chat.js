@@ -1,7 +1,6 @@
 (() => {
   const $ = (id) => document.getElementById(id);
 
-  const tokenEl = $("token");
   const modelEl = $("model");
   const loadModelsEl = $("loadModels");
   const inputEl = $("input");
@@ -68,25 +67,10 @@
   }
 
   async function loadModels() {
-    const token = (tokenEl.value || "").trim();
-    if (!token) {
-      modelEl.innerHTML = "";
-      const opt = document.createElement("option");
-      opt.value = "fast";
-      opt.textContent = "fast";
-      modelEl.appendChild(opt);
-      modelEl.value = "fast";
-      setMeta("Models: enter token, then Load models");
-      return;
-    }
-
     try {
       setMeta("Loading models...");
-      const resp = await fetch("/v1/models", {
+      const resp = await fetch("/ui/api/models", {
         method: "GET",
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
       });
       const text = await resp.text();
       if (!resp.ok) {
@@ -116,15 +100,10 @@
   }
 
   async function send() {
-    const token = (tokenEl.value || "").trim();
     const model = (modelEl.value || "").trim() || "fast";
     const content = (inputEl.value || "").trim();
 
     setMeta("");
-    if (!token) {
-      setOutput("Missing bearer token.");
-      return;
-    }
     if (!content) {
       setOutput("Empty message.");
       return;
@@ -134,27 +113,21 @@
     setOutput("...");
 
     try {
-      const resp = await fetch("/v1/chat/completions", {
+      const resp = await fetch("/ui/api/chat", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({
           model,
-          stream: false,
-          messages: [{ role: "user", content }],
+          message: content,
         }),
       });
-
-      const backend = resp.headers.get("x-backend-used") || "";
-      const usedModel = resp.headers.get("x-model-used") || "";
-      const reason = resp.headers.get("x-router-reason") || "";
 
       const text = await resp.text();
       if (!resp.ok) {
         setOutput(text);
-        setMeta(`HTTP ${resp.status}${backend ? ` • ${backend}` : ""}${usedModel ? ` • ${usedModel}` : ""}`);
+        setMeta(`HTTP ${resp.status}`);
         return;
       }
 
@@ -170,9 +143,10 @@
       const msg = payload?.choices?.[0]?.message?.content;
       setOutput(typeof msg === "string" ? msg : JSON.stringify(payload, null, 2));
       const bits = [];
-      if (backend) bits.push(`backend=${backend}`);
-      if (usedModel) bits.push(`model=${usedModel}`);
-      if (reason) bits.push(`reason=${reason}`);
+      const gw = payload?._gateway;
+      if (gw?.backend) bits.push(`backend=${gw.backend}`);
+      if (gw?.model) bits.push(`model=${gw.model}`);
+      if (gw?.reason) bits.push(`reason=${gw.reason}`);
       setMeta(bits.join(" • "));
     } catch (e) {
       setOutput(String(e));
@@ -198,10 +172,6 @@
   if (loadModelsEl) {
     loadModelsEl.addEventListener("click", () => void loadModels());
   }
-
-  tokenEl.addEventListener("change", _scheduleLoadModels);
-  tokenEl.addEventListener("blur", _scheduleLoadModels);
-  tokenEl.addEventListener("input", _scheduleLoadModels);
 
   setOutput("Ready.");
   setMeta("Ctrl+Enter to send");

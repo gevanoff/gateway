@@ -28,17 +28,16 @@
 
       <div class="row">
         <div>
-          <label for="token">Bearer token</label>
-          <input id="token" type="password" placeholder="GATEWAY_BEARER_TOKEN" autocomplete="off" />
-          <div class="actions" style="margin-top:10px">
-            <button id="loadModels" type="button">Load models</button>
-            <span class="hint">Fetches <code>/v1/models</code> using this token.</span>
-          </div>
+          <label>Access</label>
+          <div class="hint">UI is gated by server <code>UI_IP_ALLOWLIST</code>. No bearer token is used in the browser.</div>
         </div>
         <div>
           <label for="model">Model</label>
           <select id="model"></select>
-          <div class="hint">Populated from <code>/v1/models</code> after token is set.</div>
+          <div class="actions" style="margin-top:10px">
+            <button id="loadModels" type="button">Load models</button>
+            <span class="hint">Fetches <code>/ui/api/models</code>.</span>
+          </div>
         </div>
       </div>
 
@@ -49,7 +48,7 @@
         <div class="actions">
           <button id="send">Send</button>
           <button id="clear" type="button">Clear</button>
-          <span class="hint">Uses <code>/v1/chat/completions</code> (non-streaming).</span>
+          <span class="hint">Uses <code>/ui/api/chat</code> (non-streaming).</span>
         </div>
       </div>
 

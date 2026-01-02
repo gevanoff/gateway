@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     MAX_REQUEST_BYTES: int = 1_000_000
     IP_ALLOWLIST: str = ""
 
+    # Optional: restrict tokenless UI endpoints (/ui, /ui/api/*) to specific client IPs/CIDRs.
+    # If empty, the UI endpoints are disabled (403) to avoid exposing unauthenticated access.
+    UI_IP_ALLOWLIST: str = ""
+
     DEFAULT_BACKEND: Literal["ollama", "mlx"] = "ollama"
 
     # Backends can each have "strong" and "fast" model choices.
