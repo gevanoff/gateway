@@ -577,6 +577,19 @@ def _print_results(results: list[CheckResult]) -> int:
     return 0
 
 
+def _env_gateway_token() -> str:
+    tok = (os.getenv("GATEWAY_BEARER_TOKEN") or "").strip()
+    if tok:
+        return tok
+    raw = (os.getenv("GATEWAY_BEARER_TOKENS") or "").strip()
+    if raw:
+        for part in raw.split(","):
+            t = part.strip()
+            if t:
+                return t
+    return ""
+
+
 def main(argv: list[str]) -> int:
     _maybe_reexec_into_gateway_venv()
 
@@ -588,8 +601,8 @@ def main(argv: list[str]) -> int:
     )
     p.add_argument(
         "--token",
-        default=(os.getenv("GATEWAY_BEARER_TOKEN") or "test-token"),
-        help="Bearer token for /health, /v1/*, /metrics (default: $GATEWAY_BEARER_TOKEN or test-token).",
+        default="",
+        help="Bearer token for /health, /v1/*, /metrics (default: $GATEWAY_BEARER_TOKEN or first of $GATEWAY_BEARER_TOKENS).",
     )
     p.add_argument("--skip-pytest", action="store_true", help="Skip running pytest.")
     p.add_argument(
@@ -609,6 +622,8 @@ def main(argv: list[str]) -> int:
     )
     ns = p.parse_args(argv)
 
+    token = (ns.token or "").strip() or _env_gateway_token()
+
     if ns.appliance:
         ns.require_backend = True
 
@@ -622,16 +637,30 @@ def main(argv: list[str]) -> int:
     proc: Optional[subprocess.Popen] = None
     base_url = (ns.base_url or "").strip()
 
+    if base_url and not token:
+        results.append(
+            CheckResult(
+                name="token",
+                ok=False,
+                detail="Missing token. Set GATEWAY_BEARER_TOKEN (recommended) or pass --token.",
+            )
+        )
+        return _print_results(results)
+
     if not base_url:
         if ns.no_start:
             results.append(CheckResult(name="start_server", ok=False, detail="--no-start requires --base-url"))
             return _print_results(results)
 
+        if not token:
+            token = "test-token"
+            print("NOTE: no token provided; using 'test-token' for the spawned server", file=sys.stderr)
+
         port = _find_free_port()
         base_url = f"http://127.0.0.1:{port}"
 
         env = dict(os.environ)
-        env.setdefault("GATEWAY_BEARER_TOKEN", ns.token)
+        env.setdefault("GATEWAY_BEARER_TOKEN", token)
         # Keep runtime checks self-contained and fast.
         env.setdefault("MEMORY_ENABLED", "false")
         env.setdefault("MEMORY_V2_ENABLED", "false")
@@ -639,7 +668,7 @@ def main(argv: list[str]) -> int:
 
         proc = _start_uvicorn(cwd=repo_root, port=port, env=env)
         try:
-            _wait_for_health(base_url, ns.token)
+            _wait_for_health(base_url, token)
             results.append(CheckResult(name="start_server", ok=True, detail=base_url))
         except Exception as e:
             results.append(CheckResult(name="start_server", ok=False, detail=f"{type(e).__name__}: {e}"))
@@ -654,7 +683,7 @@ def main(argv: list[str]) -> int:
             return _print_results(results)
 
     try:
-        http_results = _run_http_checks(base_url=base_url, token=ns.token, require_backend=ns.require_backend)
+        http_results = _run_http_checks(base_url=base_url, token=token, require_backend=ns.require_backend)
         results.extend(http_results)
     finally:
         if proc is not None:

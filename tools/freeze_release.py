@@ -110,6 +110,19 @@ def _best_effort(fn, *args, **kwargs) -> BestEffortField:
         return BestEffortField(value=None, error=f"{type(e).__name__}: {e}")
 
 
+def _env_gateway_token() -> str:
+    tok = (os.getenv("GATEWAY_BEARER_TOKEN") or "").strip()
+    if tok:
+        return tok
+    raw = (os.getenv("GATEWAY_BEARER_TOKENS") or "").strip()
+    if raw:
+        for part in raw.split(","):
+            t = part.strip()
+            if t:
+                return t
+    return ""
+
+
 def _now_iso() -> str:
     return _dt.datetime.now(tz=_dt.timezone.utc).isoformat()
 
@@ -161,8 +174,8 @@ def main(argv: list[str]) -> int:
     )
     p.add_argument(
         "--token",
-        default=os.getenv("GATEWAY_BEARER_TOKEN") or "",
-        help="Bearer token for gateway queries (recommended).",
+        default="",
+        help="Bearer token for gateway queries (default: $GATEWAY_BEARER_TOKEN or first of $GATEWAY_BEARER_TOKENS).",
     )
     p.add_argument(
         "--ollama-base-url",
@@ -176,6 +189,8 @@ def main(argv: list[str]) -> int:
     )
 
     ns = p.parse_args(argv)
+
+    ns.token = (ns.token or "").strip() or _env_gateway_token()
 
     app_dir = os.path.abspath(ns.app_dir)
     out_path = ns.out.strip() or os.path.join(app_dir, "release_manifest.json")

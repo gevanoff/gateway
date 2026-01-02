@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from typing import Any
 
@@ -122,10 +123,27 @@ def _check_ui_image(gateway_base: str) -> None:
         raise RuntimeError("ui image response missing data[0].b64_json")
 
 
+def _env_gateway_token() -> str:
+    tok = (os.getenv("GATEWAY_BEARER_TOKEN") or "").strip()
+    if tok:
+        return tok
+    raw = (os.getenv("GATEWAY_BEARER_TOKENS") or "").strip()
+    if raw:
+        for part in raw.split(","):
+            t = part.strip()
+            if t:
+                return t
+    return ""
+
+
 def main(argv: list[str]) -> int:
     p = argparse.ArgumentParser(description="Smoke-test A1111 and gateway image generation endpoints.")
     p.add_argument("--gateway-base-url", default="http://127.0.0.1:8800")
-    p.add_argument("--token", default="", help="Bearer token for /v1/images/generations")
+    p.add_argument(
+        "--token",
+        default="",
+        help="Bearer token for /v1/images/generations (default: $GATEWAY_BEARER_TOKEN or first of $GATEWAY_BEARER_TOKENS).",
+    )
     p.add_argument(
         "--also-check-a1111",
         default="",
@@ -151,6 +169,8 @@ def main(argv: list[str]) -> int:
 
     args = p.parse_args(argv)
 
+    token = (args.token or "").strip() or _env_gateway_token()
+
     if args.also_check_a1111:
         print(f"[1/3] Checking A1111 at {args.also_check_a1111} ...")
         _check_a1111(args.also_check_a1111)
@@ -163,11 +183,11 @@ def main(argv: list[str]) -> int:
         _check_openai_images(args.also_check_openai_images, model=args.openai_images_model)
         print("OK: images server reachable, generations returned b64_json")
 
-    if not args.token:
+    if not token:
         print("Skipping gateway /v1/images/generations check (no --token provided)")
     else:
         print(f"[2/3] Checking gateway images at {args.gateway_base_url} ...")
-        _check_gateway_images(args.gateway_base_url, args.token)
+        _check_gateway_images(args.gateway_base_url, token)
         print("OK: gateway /v1/images/generations returned b64_json")
 
     if args.check_ui:

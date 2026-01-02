@@ -15,6 +15,19 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 
+def _env_gateway_token() -> str:
+    tok = (os.getenv("GATEWAY_BEARER_TOKEN") or "").strip()
+    if tok:
+        return tok
+    raw = (os.getenv("GATEWAY_BEARER_TOKENS") or "").strip()
+    if raw:
+        for part in raw.split(","):
+            t = part.strip()
+            if t:
+                return t
+    return ""
+
+
 def _maybe_reexec_into_gateway_venv() -> None:
     """Re-exec into the gateway venv python when available.
 
@@ -328,7 +341,11 @@ def main() -> int:
 
     ap = argparse.ArgumentParser(description="Local eval harness for the gateway (quality/safety/regressions).")
     ap.add_argument("--base-url", default=os.getenv("GATEWAY_BASE_URL", "http://127.0.0.1:8800"), help="Gateway base URL")
-    ap.add_argument("--token", default=os.getenv("GATEWAY_BEARER_TOKEN", ""), help="Bearer token")
+    ap.add_argument(
+        "--token",
+        default="",
+        help="Bearer token (default: $GATEWAY_BEARER_TOKEN or first of $GATEWAY_BEARER_TOKENS)",
+    )
     ap.add_argument("--require-backend", action="store_true", help="Fail if no healthy upstreams")
     ap.add_argument("--golden", default=os.getenv("GATEWAY_EVAL_GOLDEN", ""), help="Path to golden eval JSON (optional)")
     ap.add_argument("--out-dir", default=os.getenv("GATEWAY_EVALS_DIR", "/var/lib/gateway/data/evals"), help="Directory for reports/history")
@@ -336,6 +353,8 @@ def main() -> int:
     ap.add_argument("--total-budget-ms", type=float, default=float(os.getenv("GATEWAY_EVAL_TOTAL_BUDGET_MS", "15000")), help="Total completion time budget")
     ap.add_argument("--start-server", action="store_true", help="Start uvicorn locally for the eval run (dev convenience)")
     args = ap.parse_args()
+
+    args.token = (args.token or "").strip() or _env_gateway_token()
 
     if not args.token:
         print("Missing token. Set --token or GATEWAY_BEARER_TOKEN.")
