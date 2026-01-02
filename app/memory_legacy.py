@@ -14,9 +14,10 @@ from app.upstreams import embed_text_for_memory
 
 def _db() -> sqlite3.Connection:
     os.makedirs(os.path.dirname(S.MEMORY_DB_PATH), exist_ok=True)
-    conn = sqlite3.connect(S.MEMORY_DB_PATH)
+    conn = sqlite3.connect(S.MEMORY_DB_PATH, timeout=5)
     conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute("PRAGMA synchronous=NORMAL;")
+    conn.execute("PRAGMA busy_timeout=5000;")
     return conn
 
 
