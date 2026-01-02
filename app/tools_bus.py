@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import json
@@ -45,6 +46,34 @@ _REGISTRY_CACHE: dict[str, Any] = {"path": None, "mtime": None, "tools": {}}
 
 
 _TOOLS_CONCURRENCY_SEM: threading.Semaphore | None = None
+
+
+def _run_coroutine_sync(coro: Any) -> Any:
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+
+    result: Any = None
+    error: Exception | None = None
+
+    def runner() -> None:
+        nonlocal result, error
+        try:
+            result = asyncio.run(coro)
+        except Exception as exc:
+            error = exc
+
+    thread = threading.Thread(target=runner, daemon=True)
+    thread.start()
+    thread.join()
+    if error is not None:
+        raise error
+    return result
+
+
+def _embed_text_sync(text: str) -> list[float]:
+    return _run_coroutine_sync(embed_text_for_memory(text))
 
 
 def _tools_concurrency_sem() -> threading.Semaphore:
@@ -885,7 +914,7 @@ TOOL_IMPL = {
     "models_refresh": tool_models_refresh,
     "memory_v2_upsert": lambda args: memory_v2.upsert(
         db_path=S.MEMORY_DB_PATH,
-        embed=embed_text_for_memory,
+        embed=_embed_text_sync,
         text=str(args.get("text") or ""),
         mtype=str(args.get("type") or "fact"),
         source=str(args.get("source") or "user"),
@@ -895,7 +924,7 @@ TOOL_IMPL = {
     ),
     "memory_v2_search": lambda args: memory_v2.search(
         db_path=S.MEMORY_DB_PATH,
-        embed=embed_text_for_memory,
+        embed=_embed_text_sync,
         query=str(args.get("query") or ""),
         k=int(args.get("top_k") or 6),
         min_sim=float(args.get("min_sim") or 0.25),
