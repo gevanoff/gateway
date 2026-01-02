@@ -35,6 +35,13 @@ class Settings(BaseSettings):
     # If empty, the UI endpoints are disabled (403) to avoid exposing unauthenticated access.
     UI_IP_ALLOWLIST: str = ""
 
+    # Tokenless UI image caching
+    # The UI image endpoint can store generated images on disk and return short-lived URLs
+    # served by the gateway (still gated by UI_IP_ALLOWLIST).
+    UI_IMAGE_DIR: str = "/var/lib/gateway/data/ui_images"
+    UI_IMAGE_TTL_SEC: int = 900
+    UI_IMAGE_MAX_BYTES: int = 50_000_000
+
     # Images (text-to-image)
     # Default backend is "mock" which returns an SVG placeholder.
     # Set IMAGES_BACKEND=http_a1111 and IMAGES_HTTP_BASE_URL=http://127.0.0.1:7860 to use Automatic1111's API.

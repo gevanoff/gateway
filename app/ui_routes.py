@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+import base64
 import ipaddress
+import os
+import re
+import secrets
+import time
 from pathlib import Path
 from typing import Any, Dict, Literal, Optional
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import FileResponse
 from fastapi.responses import HTMLResponse
 
 from app.config import S
@@ -19,6 +25,9 @@ from app.images_backend import generate_images
 
 
 router = APIRouter()
+
+
+_SAFE_FILE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 
 def _client_ip(req: Request) -> str:
@@ -72,11 +81,166 @@ def _require_ui_access(req: Request) -> None:
     raise HTTPException(status_code=403, detail="UI denied (client IP not allowlisted)")
 
 
+def _ui_image_dir() -> str:
+    return (getattr(S, "UI_IMAGE_DIR", "") or "/var/lib/gateway/data/ui_images").strip() or "/var/lib/gateway/data/ui_images"
+
+
+def _ui_image_ttl_sec() -> int:
+    try:
+        return int(getattr(S, "UI_IMAGE_TTL_SEC", 900) or 900)
+    except Exception:
+        return 900
+
+
+def _ui_image_max_bytes() -> int:
+    try:
+        return int(getattr(S, "UI_IMAGE_MAX_BYTES", 50_000_000) or 50_000_000)
+    except Exception:
+        return 50_000_000
+
+
+def _ensure_dir(path: str) -> None:
+    os.makedirs(path, exist_ok=True)
+
+
+def _cleanup_ui_images(path: str, *, ttl_sec: int) -> None:
+    # Best-effort cleanup; never fail the request for cleanup errors.
+    if ttl_sec <= 0:
+        return
+    now = time.time()
+    cutoff = now - float(ttl_sec)
+    try:
+        for name in os.listdir(path):
+            full = os.path.join(path, name)
+            try:
+                st = os.stat(full)
+                if st.st_mtime < cutoff:
+                    os.remove(full)
+            except FileNotFoundError:
+                continue
+            except Exception:
+                continue
+    except Exception:
+        return
+
+
+def _mime_to_ext(mime: str) -> str:
+    m = (mime or "").lower().strip()
+    if m == "image/png":
+        return "png"
+    if m == "image/jpeg":
+        return "jpg"
+    if m == "image/webp":
+        return "webp"
+    if m == "image/svg+xml":
+        return "svg"
+    return "bin"
+
+
+def _decode_image_b64(b64_or_data_url: str) -> tuple[bytes, str | None]:
+    s = (b64_or_data_url or "").strip()
+    if not s:
+        raise ValueError("empty image data")
+
+    if s.startswith("data:"):
+        # data:<mime>;base64,<payload>
+        try:
+            header, payload = s.split(",", 1)
+        except ValueError:
+            raise ValueError("invalid data URL")
+
+        mime = None
+        try:
+            header2 = header[5:]
+            parts = header2.split(";")
+            if parts:
+                mime = parts[0].strip() or None
+        except Exception:
+            mime = None
+
+        raw = base64.b64decode(payload.encode("ascii"), validate=False)
+        return raw, mime
+
+    raw2 = base64.b64decode(s.encode("ascii"), validate=False)
+    return raw2, None
+
+
+def _save_ui_image(*, b64: str, mime_hint: str) -> tuple[str, str]:
+    img_dir = _ui_image_dir()
+    ttl_sec = _ui_image_ttl_sec()
+    max_bytes = _ui_image_max_bytes()
+    _ensure_dir(img_dir)
+    _cleanup_ui_images(img_dir, ttl_sec=ttl_sec)
+
+    raw, mime_from_data = _decode_image_b64(b64)
+    if len(raw) > max_bytes:
+        raise ValueError(f"image too large to cache ({len(raw)} bytes > {max_bytes})")
+
+    mime = (mime_from_data or mime_hint or "application/octet-stream").strip()
+    ext = _mime_to_ext(mime)
+    name = f"{secrets.token_urlsafe(18)}.{ext}"
+    # Make the filename deterministic-safe.
+    name = name.replace("-", "_")
+    if not _SAFE_FILE_RE.match(name):
+        # Extremely unlikely, but fail closed.
+        raise ValueError("failed to generate safe filename")
+
+    tmp = os.path.join(img_dir, f".{name}.tmp")
+    dst = os.path.join(img_dir, name)
+    with open(tmp, "wb") as f:
+        f.write(raw)
+    os.replace(tmp, dst)
+
+    return f"/ui/images/{name}", mime
+
+
 @router.get("/ui", include_in_schema=False)
 async def ui(req: Request) -> HTMLResponse:
     _require_ui_access(req)
     html_path = Path(__file__).with_name("static").joinpath("chat.html")
     return HTMLResponse(html_path.read_text(encoding="utf-8"))
+
+
+@router.get("/ui/images/{name}", include_in_schema=False)
+async def ui_image_file(req: Request, name: str):
+    _require_ui_access(req)
+
+    if not _SAFE_FILE_RE.match(name or ""):
+        raise HTTPException(status_code=404, detail="not found")
+
+    img_dir = _ui_image_dir()
+    ttl_sec = _ui_image_ttl_sec()
+    _ensure_dir(img_dir)
+    _cleanup_ui_images(img_dir, ttl_sec=ttl_sec)
+
+    full = os.path.join(img_dir, name)
+    try:
+        st = os.stat(full)
+        if ttl_sec > 0 and (time.time() - float(st.st_mtime)) > float(ttl_sec):
+            # Expired; best-effort delete.
+            try:
+                os.remove(full)
+            except Exception:
+                pass
+            raise HTTPException(status_code=404, detail="expired")
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="not found")
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=404, detail="not found")
+
+    ext = (name.rsplit(".", 1)[-1] if "." in name else "").lower()
+    media_type = {
+        "png": "image/png",
+        "jpg": "image/jpeg",
+        "jpeg": "image/jpeg",
+        "webp": "image/webp",
+        "svg": "image/svg+xml",
+    }.get(ext, "application/octet-stream")
+
+    headers = {"cache-control": "private, max-age=60"}
+    return FileResponse(full, media_type=media_type, headers=headers)
 
 
 @router.get("/ui/api/models", include_in_schema=False)
@@ -196,12 +360,36 @@ async def ui_image(req: Request) -> Dict[str, Any]:
     model = body.get("model")
 
     try:
-        return await generate_images(
+        resp = await generate_images(
             prompt=prompt,
             size=size,
             n=n,
             model=str(model) if isinstance(model, str) and model.strip() else None,
         )
+
+        # Prefer short-lived URLs for the browser (avoids huge data: URIs and broken rendering).
+        if isinstance(resp, dict) and isinstance(resp.get("data"), list):
+            gw = resp.get("_gateway") if isinstance(resp.get("_gateway"), dict) else {}
+            mime = (gw.get("mime") or "image/png") if isinstance(gw, dict) else "image/png"
+            ttl_sec = _ui_image_ttl_sec()
+
+            out_items: list[dict[str, Any]] = []
+            for item in resp.get("data")[:n]:
+                if not isinstance(item, dict):
+                    continue
+                b64 = item.get("b64_json")
+                if isinstance(b64, str) and b64.strip():
+                    url, mime_used = _save_ui_image(b64=b64, mime_hint=str(mime))
+                    out_items.append({"url": url})
+                    mime = mime_used
+
+            if out_items:
+                resp["data"] = out_items
+                resp.setdefault("_gateway", {})
+                if isinstance(resp.get("_gateway"), dict):
+                    resp["_gateway"].update({"mime": mime, "ui_cache": True, "ttl_sec": ttl_sec})
+
+        return resp
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
