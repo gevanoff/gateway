@@ -20,6 +20,7 @@ from app.model_aliases import get_aliases
 from app.tools_bus import router as tools_router
 from app.agent_routes import router as agent_router
 from app.ui_routes import router as ui_router
+from app.images_routes import router as images_router
 from app import memory_v2
 from app import metrics
 
@@ -214,6 +215,7 @@ if S.MEMORY_V2_ENABLED:
 # Routers
 app.include_router(health_router)
 app.include_router(openai_router)
+app.include_router(images_router)
 app.include_router(memory_router)
 app.include_router(tools_router)
 app.include_router(agent_router)

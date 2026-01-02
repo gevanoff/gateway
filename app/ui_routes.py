@@ -15,6 +15,7 @@ from app.openai_utils import now_unix
 from app.router import decide_route
 from app.router_cfg import router_cfg
 from app.upstreams import call_mlx_openai, call_ollama
+from app.images_backend import generate_images
 
 
 router = APIRouter()
@@ -177,3 +178,25 @@ async def ui_chat(req: Request) -> Dict[str, Any]:
         if isinstance(resp.get("_gateway"), dict):
             resp["_gateway"].update({"backend": backend, "model": upstream_model, "reason": route.reason})
     return resp
+
+
+@router.post("/ui/api/image", include_in_schema=False)
+async def ui_image(req: Request) -> Dict[str, Any]:
+    _require_ui_access(req)
+    body = await req.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="body must be an object")
+
+    prompt = (body.get("prompt") or "").strip()
+    if not prompt:
+        raise HTTPException(status_code=400, detail="prompt required")
+
+    size = str(body.get("size") or "1024x1024")
+    n = int(body.get("n") or 1)
+
+    try:
+        return await generate_images(prompt=prompt, size=size, n=n)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"image backend error: {type(e).__name__}: {e}")

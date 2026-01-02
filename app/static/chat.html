@@ -54,6 +54,32 @@
 
       <div id="out" class="log" aria-live="polite"></div>
       <div id="meta" class="meta"></div>
+
+      <hr style="margin:22px 0; border:0; border-top:1px solid rgba(231,237,246,0.12)" />
+
+      <h1 style="margin-top:0">Image</h1>
+      <div class="row">
+        <div>
+          <label for="imgPrompt">Prompt</label>
+          <textarea id="imgPrompt" placeholder="Text prompt"></textarea>
+          <div class="actions">
+            <button id="imgGenerate">Generate</button>
+            <button id="imgClear" type="button">Clear</button>
+          </div>
+        </div>
+        <div>
+          <label for="imgSize">Size</label>
+          <select id="imgSize">
+            <option value="512x512">512x512</option>
+            <option value="768x768">768x768</option>
+            <option value="1024x1024" selected>1024x1024</option>
+          </select>
+          <div class="hint">Uses <code>/ui/api/image</code>.</div>
+        </div>
+      </div>
+
+      <div id="imgOut" class="log" aria-live="polite"></div>
+      <div id="imgMeta" class="meta"></div>
     </main>
 
     <script src="/static/chat.js"></script>

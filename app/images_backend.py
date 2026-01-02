@@ -1,0 +1,103 @@
+from __future__ import annotations
+
+import base64
+import time
+from typing import Any, Dict, List, Literal, Tuple
+
+import httpx
+
+from app.config import S
+
+
+def _parse_size(size: str) -> Tuple[int, int]:
+    s = (size or "").strip().lower()
+    if not s:
+        s = "1024x1024"
+    if "x" not in s:
+        raise ValueError("size must be like '1024x1024'")
+    a, b = s.split("x", 1)
+    w = int(a.strip())
+    h = int(b.strip())
+    if w <= 0 or h <= 0:
+        raise ValueError("size must be positive")
+    max_px = int(getattr(S, "IMAGES_MAX_PIXELS", 2_000_000) or 2_000_000)
+    if w * h > max_px:
+        raise ValueError("size too large")
+    return w, h
+
+
+def _b64(b: bytes) -> str:
+    return base64.b64encode(b).decode("ascii")
+
+
+def _mock_svg(prompt: str, width: int, height: int) -> bytes:
+    # Minimal placeholder image: preserves negative space (no crop) and is deterministic.
+    p = (prompt or "").strip()
+    if len(p) > 400:
+        p = p[:400] + "…"
+
+    # Escape basic XML characters.
+    p = p.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    svg = f"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{width}\" height=\"{height}\" viewBox=\"0 0 {width} {height}\">
+  <rect width=\"100%\" height=\"100%\" fill=\"#0b0d10\"/>
+  <rect x=\"24\" y=\"24\" width=\"{max(0, width - 48)}\" height=\"{max(0, height - 48)}\" fill=\"#0e1217\" stroke=\"rgba(231,237,246,0.18)\"/>
+  <text x=\"48\" y=\"72\" fill=\"#e7edf6\" font-family=\"ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial\" font-size=\"20\" font-weight=\"600\">Mock image backend</text>
+  <text x=\"48\" y=\"104\" fill=\"#a9b4c3\" font-family=\"ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial\" font-size=\"14\">No image engine configured. Set IMAGES_BACKEND to http_a1111 to use a real generator.</text>
+  <foreignObject x=\"48\" y=\"132\" width=\"{max(0, width - 96)}\" height=\"{max(0, height - 180)}\">
+    <div xmlns=\"http://www.w3.org/1999/xhtml\" style=\"color:#c1ccdb;font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;font-size:14px;line-height:1.5;white-space:pre-wrap;\">{p}</div>
+  </foreignObject>
+</svg>
+"""
+    return svg.encode("utf-8")
+
+
+async def generate_images(*, prompt: str, size: str = "1024x1024", n: int = 1) -> Dict[str, Any]:
+    """Generate images in an OpenAI-ish response shape.
+
+    Backends:
+      - mock: returns a placeholder SVG (always available)
+      - http_a1111: proxies to an Automatic1111-compatible API (txt2img)
+    """
+
+    n = int(n or 1)
+    n = max(1, min(n, 4))
+    width, height = _parse_size(size)
+
+    backend: str = (getattr(S, "IMAGES_BACKEND", "mock") or "mock").strip().lower()
+
+    if backend == "http_a1111":
+        base = (getattr(S, "IMAGES_HTTP_BASE_URL", "") or "").strip().rstrip("/")
+        if not base:
+            raise RuntimeError("IMAGES_HTTP_BASE_URL is required for http_a1111")
+
+        timeout = float(getattr(S, "IMAGES_HTTP_TIMEOUT_SEC", 120.0) or 120.0)
+        payload = {
+            "prompt": prompt,
+            "width": width,
+            "height": height,
+            "batch_size": n,
+            # Keep defaults conservative; user can tune on the server.
+            "steps": int(getattr(S, "IMAGES_A1111_STEPS", 20) or 20),
+        }
+
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            r = await client.post(f"{base}/sdapi/v1/txt2img", json=payload)
+            r.raise_for_status()
+            out = r.json()
+
+        images = out.get("images") if isinstance(out, dict) else None
+        if not (isinstance(images, list) and images and all(isinstance(x, str) for x in images)):
+            raise RuntimeError("unexpected response from image backend")
+
+        data = [{"b64_json": images[i]} for i in range(min(n, len(images)))]
+        resp: Dict[str, Any] = {"created": int(time.time()), "data": data}
+        resp["_gateway"] = {"backend": backend, "mime": "image/png"}
+        return resp
+
+    # Default: mock
+    svg_bytes = _mock_svg(prompt, width, height)
+    data = [{"b64_json": _b64(svg_bytes)} for _ in range(n)]
+    resp = {"created": int(time.time()), "data": data, "_gateway": {"backend": "mock", "mime": "image/svg+xml"}}
+    return resp
