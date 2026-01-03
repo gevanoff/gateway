@@ -59,6 +59,7 @@ async def generate_images(
     size: str = "1024x1024",
     n: int = 1,
     model: str | None = None,
+    options: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     """Generate images in an OpenAI-ish response shape.
 
@@ -74,6 +75,42 @@ async def generate_images(
 
     backend: str = (getattr(S, "IMAGES_BACKEND", "mock") or "mock").strip().lower()
 
+    def _filtered_options(opts: Dict[str, Any] | None) -> Dict[str, Any]:
+        if not isinstance(opts, dict) or not opts:
+            return {}
+
+        # Conservative allowlist: upstream servers vary widely.
+        allowed = {
+            # Common knobs across SD/SDXL style servers.
+            "seed",
+            "steps",
+            "num_inference_steps",
+            "guidance",
+            "guidance_scale",
+            "cfg_scale",
+            "negative_prompt",
+            "sampler",
+            "scheduler",
+            "style",
+            "quality",
+        }
+
+        out: Dict[str, Any] = {}
+        for k, v in opts.items():
+            if k not in allowed:
+                continue
+            if v is None:
+                continue
+            if isinstance(v, str):
+                vv = v.strip()
+                if not vv:
+                    continue
+                out[k] = vv
+                continue
+            out[k] = v
+
+        return out
+
     if backend == "http_a1111":
         base = (getattr(S, "IMAGES_HTTP_BASE_URL", "") or "").strip().rstrip("/")
         if not base:
@@ -88,6 +125,8 @@ async def generate_images(
             # Keep defaults conservative; user can tune on the server.
             "steps": int(getattr(S, "IMAGES_A1111_STEPS", 20) or 20),
         }
+
+        payload.update(_filtered_options(options))
 
         async with httpx.AsyncClient(timeout=timeout) as client:
             r = await client.post(f"{base}/sdapi/v1/txt2img", json=payload)
@@ -120,6 +159,9 @@ async def generate_images(
             "size": f"{width}x{height}",
             "response_format": "b64_json",
         }
+
+        # Only include extra knobs if explicitly provided by the caller.
+        payload.update(_filtered_options(options))
 
         async with httpx.AsyncClient(timeout=timeout) as client:
             r = await client.post(f"{base}/v1/images/generations", json=payload)

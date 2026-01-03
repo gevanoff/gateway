@@ -359,12 +359,32 @@ async def ui_image(req: Request) -> Dict[str, Any]:
     n = int(body.get("n") or 1)
     model = body.get("model")
 
+    options = {}
+    for k in [
+        "seed",
+        "steps",
+        "num_inference_steps",
+        "guidance",
+        "guidance_scale",
+        "cfg_scale",
+        "negative_prompt",
+        "sampler",
+        "scheduler",
+        "style",
+        "quality",
+    ]:
+        if k in body:
+            options[k] = body.get(k)
+    if not options:
+        options = None
+
     try:
         resp = await generate_images(
             prompt=prompt,
             size=size,
             n=n,
             model=str(model) if isinstance(model, str) and model.strip() else None,
+            options=options,
         )
 
         # Prefer short-lived URLs for the browser (avoids huge data: URIs and broken rendering).

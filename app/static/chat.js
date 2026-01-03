@@ -11,6 +11,9 @@
 
   const imgPromptEl = $("imgPrompt");
   const imgSizeEl = $("imgSize");
+  const imgStepsEl = $("imgSteps");
+  const imgSeedEl = $("imgSeed");
+  const imgNegEl = $("imgNeg");
   const imgGenerateEl = $("imgGenerate");
   const imgClearEl = $("imgClear");
   const imgOutEl = $("imgOut");
@@ -174,6 +177,10 @@
     const prompt = (imgPromptEl.value || "").trim();
     const size = (imgSizeEl.value || "1024x1024").trim();
 
+    const stepsRaw = imgStepsEl ? String(imgStepsEl.value || "").trim() : "";
+    const seedRaw = imgSeedEl ? String(imgSeedEl.value || "").trim() : "";
+    const negative_prompt = imgNegEl ? String(imgNegEl.value || "").trim() : "";
+
     setImgMeta("");
     if (!prompt) {
       setImgOutputHtml("Empty prompt.");
@@ -184,10 +191,24 @@
     setImgOutputHtml("...");
 
     try {
+      const body = { prompt, size, n: 1 };
+
+      if (stepsRaw) {
+        const steps = Number(stepsRaw);
+        if (Number.isFinite(steps) && steps > 0) body.steps = Math.floor(steps);
+      }
+      if (seedRaw) {
+        const seed = Number(seedRaw);
+        if (Number.isFinite(seed)) body.seed = Math.floor(seed);
+      }
+      if (negative_prompt) {
+        body.negative_prompt = negative_prompt;
+      }
+
       const resp = await fetch("/ui/api/image", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt, size, n: 1 }),
+        body: JSON.stringify(body),
       });
 
       const text = await resp.text();
@@ -246,6 +267,9 @@
   if (imgClearEl) {
     imgClearEl.addEventListener("click", () => {
       imgPromptEl.value = "";
+      if (imgStepsEl) imgStepsEl.value = "";
+      if (imgSeedEl) imgSeedEl.value = "";
+      if (imgNegEl) imgNegEl.value = "";
       setImgOutputHtml("");
       setImgMeta("");
     });

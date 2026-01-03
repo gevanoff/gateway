@@ -74,6 +74,18 @@
             <option value="768x768">768x768</option>
             <option value="1024x1024" selected>1024x1024</option>
           </select>
+          <div style="margin-top:12px">
+            <label for="imgSteps">Steps (optional)</label>
+            <input id="imgSteps" type="number" min="1" max="200" step="1" placeholder="e.g. 8" />
+          </div>
+          <div style="margin-top:12px">
+            <label for="imgSeed">Seed (optional)</label>
+            <input id="imgSeed" type="number" step="1" placeholder="e.g. 12345" />
+          </div>
+          <div style="margin-top:12px">
+            <label for="imgNeg">Negative prompt (optional)</label>
+            <input id="imgNeg" type="text" placeholder="e.g. blurry, lowres, bad anatomy" />
+          </div>
           <div class="hint">Uses <code>/ui/api/image</code>.</div>
         </div>
       </div>
@@ -82,6 +94,6 @@
       <div id="imgMeta" class="meta"></div>
     </main>
 
-    <script src="/static/chat.js?v=2"></script>
+    <script src="/static/chat.js?v=3"></script>
   </body>
 </html>

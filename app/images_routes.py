@@ -24,12 +24,33 @@ async def images_generations(req: Request):
     size = body.get("size", "1024x1024")
     model = body.get("model")
 
+    # Optional quality/tuning knobs (best-effort passthrough; upstream may ignore or reject).
+    options = {}
+    for k in [
+        "seed",
+        "steps",
+        "num_inference_steps",
+        "guidance",
+        "guidance_scale",
+        "cfg_scale",
+        "negative_prompt",
+        "sampler",
+        "scheduler",
+        "style",
+        "quality",
+    ]:
+        if k in body:
+            options[k] = body.get(k)
+    if not options:
+        options = None
+
     try:
         return await generate_images(
             prompt=prompt,
             size=str(size),
             n=int(n),
             model=str(model) if isinstance(model, str) and model.strip() else None,
+            options=options,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
