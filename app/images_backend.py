@@ -111,6 +111,14 @@ async def generate_images(
 
         return out
 
+    def _has_guidance(opts: Dict[str, Any] | None) -> bool:
+        if not isinstance(opts, dict) or not opts:
+            return False
+        for k in ("guidance", "guidance_scale", "cfg_scale"):
+            if k in opts and opts.get(k) is not None:
+                return True
+        return False
+
     if backend == "http_a1111":
         base = (getattr(S, "IMAGES_HTTP_BASE_URL", "") or "").strip().rstrip("/")
         if not base:
@@ -161,7 +169,27 @@ async def generate_images(
         }
 
         # Only include extra knobs if explicitly provided by the caller.
-        payload.update(_filtered_options(options))
+        filtered = _filtered_options(options)
+        payload.update(filtered)
+
+        # SDXL-Turbo guidance: many implementations expect guidance to be disabled.
+        # Apply a safe default only when the model name indicates turbo and the caller
+        # did not already specify any guidance/cfg.
+        guidance_used: float | None = None
+        guidance_auto: bool = False
+        if ("turbo" in chosen_model.lower()) and not _has_guidance(filtered):
+            payload["guidance_scale"] = 0.0
+            guidance_used = 0.0
+            guidance_auto = True
+        else:
+            # If caller provided a value, surface the most specific one we can.
+            for k in ("guidance_scale", "cfg_scale", "guidance"):
+                if k in filtered:
+                    try:
+                        guidance_used = float(filtered[k])
+                    except Exception:
+                        guidance_used = None
+                    break
 
         async with httpx.AsyncClient(timeout=timeout) as client:
             r = await client.post(f"{base}/v1/images/generations", json=payload)
@@ -183,6 +211,8 @@ async def generate_images(
 
         resp2: Dict[str, Any] = {"created": int(out.get("created") or time.time()), "data": normalized}
         resp2["_gateway"] = {"backend": backend, "mime": "image/png", "model": chosen_model}
+        if guidance_used is not None:
+            resp2["_gateway"].update({"guidance_scale": guidance_used, "guidance_auto": guidance_auto})
         return resp2
 
     # Default: mock

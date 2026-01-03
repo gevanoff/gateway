@@ -13,6 +13,7 @@
   const imgSizeEl = $("imgSize");
   const imgStepsEl = $("imgSteps");
   const imgSeedEl = $("imgSeed");
+  const imgAutoGuidanceEl = $("imgAutoGuidance");
   const imgNegEl = $("imgNeg");
   const imgGenerateEl = $("imgGenerate");
   const imgClearEl = $("imgClear");
@@ -189,6 +190,7 @@
 
     imgGenerateEl.disabled = true;
     setImgOutputHtml("...");
+    if (imgAutoGuidanceEl) imgAutoGuidanceEl.textContent = "Guidance: (auto)";
 
     try {
       const body = { prompt, size, n: 1 };
@@ -231,6 +233,16 @@
       const url = payload?.data?.[0]?.url;
       const mime = payload?._gateway?.mime || "image/png";
 
+      const gwGuidance = payload?._gateway?.guidance_scale;
+      const gwGuidanceAuto = payload?._gateway?.guidance_auto;
+      if (imgAutoGuidanceEl) {
+        if (typeof gwGuidance === "number" && Number.isFinite(gwGuidance)) {
+          imgAutoGuidanceEl.textContent = `Guidance: ${gwGuidance}${gwGuidanceAuto ? " (auto)" : ""}`;
+        } else {
+          imgAutoGuidanceEl.textContent = "Guidance: (not provided)";
+        }
+      }
+
       if (typeof url === "string" && url.trim()) {
         const src = url.trim();
         setImgOutputHtml(
@@ -270,6 +282,7 @@
       if (imgStepsEl) imgStepsEl.value = "";
       if (imgSeedEl) imgSeedEl.value = "";
       if (imgNegEl) imgNegEl.value = "";
+      if (imgAutoGuidanceEl) imgAutoGuidanceEl.textContent = "Guidance: (auto)";
       setImgOutputHtml("");
       setImgMeta("");
     });
