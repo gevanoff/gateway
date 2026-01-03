@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import ipaddress
 import os
 import re
@@ -137,6 +138,23 @@ def _mime_to_ext(mime: str) -> str:
     return "bin"
 
 
+def _sniff_mime(raw: bytes) -> str | None:
+    # Best-effort sniff based on magic bytes.
+    if not raw:
+        return None
+
+    if raw.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if raw.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if len(raw) >= 12 and raw[:4] == b"RIFF" and raw[8:12] == b"WEBP":
+        return "image/webp"
+    head = raw[:256].lstrip()
+    if head.startswith(b"<svg") or head.startswith(b"<?xml"):
+        return "image/svg+xml"
+    return None
+
+
 def _decode_image_b64(b64_or_data_url: str) -> tuple[bytes, str | None]:
     s = (b64_or_data_url or "").strip()
     if not s:
@@ -159,13 +177,13 @@ def _decode_image_b64(b64_or_data_url: str) -> tuple[bytes, str | None]:
             mime = None
 
         raw = base64.b64decode(payload.encode("ascii"), validate=False)
-        return raw, mime
+        return raw, (mime or _sniff_mime(raw))
 
     raw2 = base64.b64decode(s.encode("ascii"), validate=False)
-    return raw2, None
+    return raw2, _sniff_mime(raw2)
 
 
-def _save_ui_image(*, b64: str, mime_hint: str) -> tuple[str, str]:
+def _save_ui_image(*, b64: str, mime_hint: str) -> tuple[str, str, str]:
     img_dir = _ui_image_dir()
     ttl_sec = _ui_image_ttl_sec()
     max_bytes = _ui_image_max_bytes()
@@ -175,6 +193,8 @@ def _save_ui_image(*, b64: str, mime_hint: str) -> tuple[str, str]:
     raw, mime_from_data = _decode_image_b64(b64)
     if len(raw) > max_bytes:
         raise ValueError(f"image too large to cache ({len(raw)} bytes > {max_bytes})")
+
+    sha256 = hashlib.sha256(raw).hexdigest()
 
     mime = (mime_from_data or mime_hint or "application/octet-stream").strip()
     ext = _mime_to_ext(mime)
@@ -191,7 +211,7 @@ def _save_ui_image(*, b64: str, mime_hint: str) -> tuple[str, str]:
         f.write(raw)
     os.replace(tmp, dst)
 
-    return f"/ui/images/{name}", mime
+    return f"/ui/images/{name}", mime, sha256
 
 
 @router.get("/ui", include_in_schema=False)
@@ -394,20 +414,29 @@ async def ui_image(req: Request) -> Dict[str, Any]:
             ttl_sec = _ui_image_ttl_sec()
 
             out_items: list[dict[str, Any]] = []
+            first_sha256: str | None = None
+            first_mime: str | None = None
             for item in resp.get("data")[:n]:
                 if not isinstance(item, dict):
                     continue
                 b64 = item.get("b64_json")
                 if isinstance(b64, str) and b64.strip():
-                    url, mime_used = _save_ui_image(b64=b64, mime_hint=str(mime))
+                    url, mime_used, sha256 = _save_ui_image(b64=b64, mime_hint=str(mime))
                     out_items.append({"url": url})
                     mime = mime_used
+                    if first_sha256 is None:
+                        first_sha256 = sha256
+                        first_mime = mime_used
 
             if out_items:
                 resp["data"] = out_items
                 resp.setdefault("_gateway", {})
                 if isinstance(resp.get("_gateway"), dict):
                     resp["_gateway"].update({"mime": mime, "ui_cache": True, "ttl_sec": ttl_sec})
+                    if first_sha256:
+                        resp["_gateway"].update({"ui_image_sha256": first_sha256})
+                    if first_mime:
+                        resp["_gateway"].update({"ui_image_mime": first_mime})
 
         return resp
     except ValueError as e:

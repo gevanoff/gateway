@@ -266,6 +266,11 @@
         if (upstream.cfg_scale !== undefined) metaBits.push(`up_cfg=${upstream.cfg_scale}`);
       }
 
+      const uiSha = payload?._gateway?.ui_image_sha256;
+      const uiMime = payload?._gateway?.ui_image_mime;
+      if (typeof uiMime === "string" && uiMime.trim()) metaBits.push(`mime=${uiMime.trim()}`);
+      if (typeof uiSha === "string" && uiSha.trim()) metaBits.push(`sha=${uiSha.trim().slice(0, 12)}`);
+
       if (typeof url === "string" && url.trim()) {
         const src = url.trim();
         setImgOutputHtml(
