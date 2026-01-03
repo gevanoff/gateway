@@ -257,6 +257,15 @@
         if (req.cfg_scale !== undefined) metaBits.push(`cfg=${req.cfg_scale}`);
       }
 
+      const upstream = payload?._gateway?.upstream;
+      if (upstream && typeof upstream === "object") {
+        if (upstream.seed !== undefined) metaBits.push(`up_seed=${upstream.seed}`);
+        if (upstream.steps !== undefined) metaBits.push(`up_steps=${upstream.steps}`);
+        if (upstream.num_inference_steps !== undefined) metaBits.push(`up_nis=${upstream.num_inference_steps}`);
+        if (upstream.guidance_scale !== undefined) metaBits.push(`up_gs=${upstream.guidance_scale}`);
+        if (upstream.cfg_scale !== undefined) metaBits.push(`up_cfg=${upstream.cfg_scale}`);
+      }
+
       if (typeof url === "string" && url.trim()) {
         const src = url.trim();
         setImgOutputHtml(

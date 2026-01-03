@@ -130,6 +130,44 @@ async def generate_images(
         if "cfg_scale" in payload and "guidance_scale" not in payload:
             payload.setdefault("guidance_scale", payload.get("cfg_scale"))
 
+    def _extract_upstream_meta(out: Any) -> Dict[str, Any]:
+        # Best-effort: different servers return these in different places.
+        # Keep it small and only surface a few well-known keys.
+        if not isinstance(out, dict):
+            return {}
+
+        wanted = {
+            "seed",
+            "steps",
+            "num_inference_steps",
+            "guidance_scale",
+            "cfg_scale",
+            "sampler",
+            "scheduler",
+            "model",
+        }
+
+        def pull(d: Any) -> Dict[str, Any]:
+            if not isinstance(d, dict):
+                return {}
+            m: Dict[str, Any] = {}
+            for k in wanted:
+                if k in d:
+                    v = d.get(k)
+                    if v is None:
+                        continue
+                    # Keep strings/nums/bools only; avoid dumping huge objects.
+                    if isinstance(v, (str, int, float, bool)):
+                        m[k] = v
+            return m
+
+        meta: Dict[str, Any] = {}
+        meta.update(pull(out))
+        for container_key in ("meta", "metadata", "parameters", "params", "info"):
+            meta.update(pull(out.get(container_key)))
+
+        return meta
+
     def _has_guidance(opts: Dict[str, Any] | None) -> bool:
         if not isinstance(opts, dict) or not opts:
             return False
@@ -250,6 +288,10 @@ async def generate_images(
             req_info["cfg_scale"] = payload.get("cfg_scale")
 
         resp2["_gateway"].update({"request": req_info})
+
+        upstream_meta = _extract_upstream_meta(out)
+        if upstream_meta:
+            resp2["_gateway"].update({"upstream": upstream_meta})
         return resp2
 
     # Default: mock
