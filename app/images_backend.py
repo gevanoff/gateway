@@ -89,6 +89,7 @@ async def generate_images(
             "guidance_scale",
             "cfg_scale",
             "negative_prompt",
+            "negative",
             "sampler",
             "scheduler",
             "style",
@@ -110,6 +111,24 @@ async def generate_images(
             out[k] = v
 
         return out
+
+    def _apply_compat_aliases(payload: Dict[str, Any], filtered: Dict[str, Any]) -> None:
+        # Some "OpenAI-ish" image servers accept SD-style fields but use different names.
+        # Add harmless aliases when they are missing (best-effort).
+        if "steps" in filtered and "num_inference_steps" not in filtered:
+            payload.setdefault("num_inference_steps", filtered.get("steps"))
+        if "num_inference_steps" in filtered and "steps" not in filtered:
+            payload.setdefault("steps", filtered.get("num_inference_steps"))
+
+        if "negative_prompt" in filtered and "negative" not in filtered:
+            payload.setdefault("negative", filtered.get("negative_prompt"))
+        if "negative" in filtered and "negative_prompt" not in filtered:
+            payload.setdefault("negative_prompt", filtered.get("negative"))
+
+        if "guidance_scale" in payload and "cfg_scale" not in payload:
+            payload.setdefault("cfg_scale", payload.get("guidance_scale"))
+        if "cfg_scale" in payload and "guidance_scale" not in payload:
+            payload.setdefault("guidance_scale", payload.get("cfg_scale"))
 
     def _has_guidance(opts: Dict[str, Any] | None) -> bool:
         if not isinstance(opts, dict) or not opts:
@@ -172,6 +191,9 @@ async def generate_images(
         filtered = _filtered_options(options)
         payload.update(filtered)
 
+        # Add a few alias fields for compatibility with various OpenAI-ish image servers.
+        _apply_compat_aliases(payload, filtered)
+
         # SDXL-Turbo guidance: many implementations expect guidance to be disabled.
         # Apply a safe default only when the model name indicates turbo and the caller
         # did not already specify any guidance/cfg.
@@ -179,6 +201,7 @@ async def generate_images(
         guidance_auto: bool = False
         if ("turbo" in chosen_model.lower()) and not _has_guidance(filtered):
             payload["guidance_scale"] = 0.0
+            payload.setdefault("cfg_scale", 0.0)
             guidance_used = 0.0
             guidance_auto = True
         else:
@@ -213,6 +236,20 @@ async def generate_images(
         resp2["_gateway"] = {"backend": backend, "mime": "image/png", "model": chosen_model}
         if guidance_used is not None:
             resp2["_gateway"].update({"guidance_scale": guidance_used, "guidance_auto": guidance_auto})
+
+        # Debug transparency: include the effective knobs we asked for.
+        req_info: Dict[str, Any] = {
+            "size": f"{width}x{height}",
+        }
+        for k in ("steps", "num_inference_steps", "seed", "negative_prompt", "negative"):
+            if k in payload:
+                req_info[k] = payload.get(k)
+        if "guidance_scale" in payload:
+            req_info["guidance_scale"] = payload.get("guidance_scale")
+        if "cfg_scale" in payload:
+            req_info["cfg_scale"] = payload.get("cfg_scale")
+
+        resp2["_gateway"].update({"request": req_info})
         return resp2
 
     # Default: mock

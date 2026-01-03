@@ -243,12 +243,26 @@
         }
       }
 
+      const req = payload?._gateway?.request;
+      const metaBits = [];
+      if (payload?._gateway?.backend) metaBits.push(`backend=${payload._gateway.backend}`);
+      if (payload?._gateway?.model) metaBits.push(`model=${payload._gateway.model}`);
+      if (req && typeof req === "object") {
+        if (req.size) metaBits.push(`size=${req.size}`);
+        if (req.steps !== undefined) metaBits.push(`steps=${req.steps}`);
+        if (req.num_inference_steps !== undefined) metaBits.push(`nis=${req.num_inference_steps}`);
+        if (req.seed !== undefined) metaBits.push(`seed=${req.seed}`);
+        if (req.negative_prompt) metaBits.push(`neg=yes`);
+        if (req.guidance_scale !== undefined) metaBits.push(`gs=${req.guidance_scale}`);
+        if (req.cfg_scale !== undefined) metaBits.push(`cfg=${req.cfg_scale}`);
+      }
+
       if (typeof url === "string" && url.trim()) {
         const src = url.trim();
         setImgOutputHtml(
           `<img src="${src}" alt="generated" style="max-width:100%;height:auto;display:block;border-radius:12px;border:1px solid rgba(231,237,246,0.12)" />`
         );
-        setImgMeta(payload?._gateway?.backend ? `backend=${payload._gateway.backend}` : "OK");
+        setImgMeta(metaBits.length ? metaBits.join(" • ") : "OK");
         return;
       }
 
@@ -261,7 +275,7 @@
       const b64s = b64.trim();
       const src = b64s.startsWith("data:") ? b64s : `data:${mime};base64,${b64s}`;
       setImgOutputHtml(`<img src="${src}" alt="generated" style="max-width:100%;height:auto;display:block;border-radius:12px;border:1px solid rgba(231,237,246,0.12)" />`);
-      setImgMeta(payload?._gateway?.backend ? `backend=${payload._gateway.backend}` : "OK");
+      setImgMeta(metaBits.length ? metaBits.join(" • ") : "OK");
     } catch (e) {
       setImgOutputHtml(String(e));
     } finally {
