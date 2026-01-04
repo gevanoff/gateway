@@ -2,6 +2,12 @@
 
 FastAPI “Local AI Gateway” exposing OpenAI-ish endpoints and an internal tool bus.
 
+## Security notes
+
+- All API routes are bearer-protected; treat `GATEWAY_BEARER_TOKEN` like a password.
+- The example env file in `app/.env.example` binds to loopback by default. If you bind to `0.0.0.0` for LAN access, use IP allowlisting/firewall rules.
+- Operational deployment and configuration guidance lives in `ai-infra/services/gateway/README.md`.
+
 ## Images (text-to-image)
 
 The gateway can expose an OpenAI-ish images endpoint:
