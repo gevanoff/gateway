@@ -13,7 +13,12 @@ os.environ["MEMORY_V2_ENABLED"] = "false"
 
 @pytest.fixture(scope="session", autouse=True)
 def init_test_backends():
-    """Initialize backends system once for all tests."""
+    """Initialize backends and health checker once for all tests."""
     from app.backends import init_backends
+    from app.health_checker import init_health_checker
+    
     init_backends()
+    init_health_checker()
+    # Don't start the background checker in tests
+    
     yield
