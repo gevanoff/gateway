@@ -138,10 +138,14 @@ class AdmissionController:
         stats = {}
         for (backend_class, route_kind), sem in self._semaphores.items():
             key = f"{backend_class}.{route_kind}"
+            # Use _value for available, calculate limit from initial config
+            config = self.registry.get_backend(backend_class)
+            limit = config.get_limit(route_kind) if config else 1
+            available = sem._value
             stats[key] = {
-                "limit": sem._bound_value,
-                "available": sem._value,
-                "inflight": sem._bound_value - sem._value,
+                "limit": limit,
+                "available": available,
+                "inflight": limit - available,
             }
         return stats
 
@@ -222,14 +226,16 @@ def init_backends():
 def get_registry() -> BackendRegistry:
     """Get the global backend registry."""
     if _registry is None:
-        raise RuntimeError("Backend registry not initialized. Call init_backends() first.")
+        # Auto-initialize with defaults if not explicitly initialized
+        init_backends()
     return _registry
 
 
 def get_admission_controller() -> AdmissionController:
     """Get the global admission controller."""
     if _admission is None:
-        raise RuntimeError("Admission controller not initialized. Call init_backends() first.")
+        # Auto-initialize with defaults if not explicitly initialized
+        init_backends()
     return _admission
 
 
