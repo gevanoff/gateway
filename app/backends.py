@@ -1,0 +1,261 @@
+"""Backend configuration and admission control.
+
+Single source of truth for backend classes, capabilities, concurrency limits,
+and payload policies. Provides deterministic routing and fast-fail overload protection.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Dict, List, Literal, Optional
+
+import yaml
+from fastapi import HTTPException
+
+from app.config import S, logger
+
+
+RouteKind = Literal["chat", "embeddings", "images"]
+
+
+@dataclass(frozen=True)
+class BackendConfig:
+    """Configuration for a single backend class."""
+
+    backend_class: str
+    base_url: str
+    description: str
+    supported_capabilities: List[RouteKind]
+    concurrency_limits: Dict[RouteKind, int]
+    health_liveness: str
+    health_readiness: str
+    payload_policy: Dict[str, Any]
+
+    def supports(self, route_kind: RouteKind) -> bool:
+        """Check if this backend supports the given route kind."""
+        return route_kind in self.supported_capabilities
+
+    def get_limit(self, route_kind: RouteKind) -> int:
+        """Get concurrency limit for a route kind."""
+        return self.concurrency_limits.get(route_kind, 1)
+
+
+@dataclass
+class BackendRegistry:
+    """Registry of all backend configurations."""
+
+    backends: Dict[str, BackendConfig]
+    legacy_mapping: Dict[str, str]
+
+    def get_backend(self, backend_class: str) -> Optional[BackendConfig]:
+        """Get backend config by class name."""
+        # Check legacy mapping first
+        actual_class = self.legacy_mapping.get(backend_class, backend_class)
+        return self.backends.get(actual_class)
+
+    def resolve_backend_class(self, backend_name: str) -> str:
+        """Resolve a backend name (including legacy names) to its canonical class."""
+        return self.legacy_mapping.get(backend_name, backend_name)
+
+
+class AdmissionController:
+    """Enforces concurrency limits with semaphore-based admission control.
+    
+    Tracks inflight requests per (backend_class, route_kind) pair.
+    Returns 429 immediately when limit is exceeded (no queueing).
+    """
+
+    def __init__(self, registry: BackendRegistry):
+        self.registry = registry
+        # Semaphores keyed by (backend_class, route_kind)
+        self._semaphores: Dict[tuple[str, RouteKind], asyncio.Semaphore] = {}
+        self._init_semaphores()
+
+    def _init_semaphores(self):
+        """Initialize semaphores for all backend/route combinations."""
+        for backend_class, config in self.registry.backends.items():
+            for route_kind in config.supported_capabilities:
+                limit = config.get_limit(route_kind)
+                key = (backend_class, route_kind)
+                self._semaphores[key] = asyncio.Semaphore(limit)
+                logger.info(
+                    f"Admission control: {backend_class}.{route_kind} limit={limit}"
+                )
+
+    def _get_semaphore(
+        self, backend_class: str, route_kind: RouteKind
+    ) -> Optional[asyncio.Semaphore]:
+        """Get semaphore for a backend/route pair."""
+        # Resolve legacy names
+        actual_class = self.registry.resolve_backend_class(backend_class)
+        return self._semaphores.get((actual_class, route_kind))
+
+    async def acquire(self, backend_class: str, route_kind: RouteKind):
+        """Acquire a slot for the request. Raises HTTPException 429 if overloaded.
+        
+        This is a non-blocking check - if the semaphore is at capacity,
+        we immediately fail rather than waiting.
+        """
+        sem = self._get_semaphore(backend_class, route_kind)
+        if sem is None:
+            # No semaphore means this backend doesn't support this route
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "capability_not_supported",
+                    "backend_class": backend_class,
+                    "route_kind": route_kind,
+                    "message": f"Backend {backend_class} does not support {route_kind}",
+                },
+            )
+
+        # Try to acquire without blocking
+        if sem.locked() and sem._value == 0:
+            # Semaphore is at capacity
+            raise HTTPException(
+                status_code=429,
+                detail={
+                    "error": "backend_overloaded",
+                    "backend_class": backend_class,
+                    "route_kind": route_kind,
+                    "message": f"Backend {backend_class} is at capacity for {route_kind} requests",
+                },
+                headers={"Retry-After": "5"},
+            )
+
+        await sem.acquire()
+
+    def release(self, backend_class: str, route_kind: RouteKind):
+        """Release a slot after request completes."""
+        sem = self._get_semaphore(backend_class, route_kind)
+        if sem is not None:
+            sem.release()
+
+    def get_stats(self) -> Dict[str, Any]:
+        """Get current admission control statistics."""
+        stats = {}
+        for (backend_class, route_kind), sem in self._semaphores.items():
+            key = f"{backend_class}.{route_kind}"
+            stats[key] = {
+                "limit": sem._bound_value,
+                "available": sem._value,
+                "inflight": sem._bound_value - sem._value,
+            }
+        return stats
+
+
+def load_backends_config(path: Optional[Path] = None) -> BackendRegistry:
+    """Load backend configuration from YAML file."""
+    if path is None:
+        # Default to file in app directory
+        path = Path(__file__).parent / "backends_config.yaml"
+
+    if not path.exists():
+        logger.warning(f"Backends config not found at {path}, using minimal defaults")
+        return _default_registry()
+
+    with open(path, "r") as f:
+        data = yaml.safe_load(f)
+
+    backends = {}
+    for name, cfg in data.get("backends", {}).items():
+        health = cfg.get("health", {})
+        backends[name] = BackendConfig(
+            backend_class=cfg.get("class", name),
+            base_url=cfg.get("base_url", ""),
+            description=cfg.get("description", ""),
+            supported_capabilities=cfg.get("supported_capabilities", []),
+            concurrency_limits=cfg.get("concurrency_limits", {}),
+            health_liveness=health.get("liveness", "/healthz"),
+            health_readiness=health.get("readiness", "/readyz"),
+            payload_policy=cfg.get("payload_policy", {}),
+        )
+
+    legacy_mapping = data.get("legacy_mapping", {})
+
+    logger.info(f"Loaded {len(backends)} backend configs from {path}")
+    return BackendRegistry(backends=backends, legacy_mapping=legacy_mapping)
+
+
+def _default_registry() -> BackendRegistry:
+    """Create a minimal default registry for backward compatibility."""
+    backends = {
+        "ollama": BackendConfig(
+            backend_class="ollama",
+            base_url=S.OLLAMA_BASE_URL,
+            description="Default Ollama backend",
+            supported_capabilities=["chat", "embeddings"],
+            concurrency_limits={"chat": 4, "embeddings": 4},
+            health_liveness="/healthz",
+            health_readiness="/readyz",
+            payload_policy={},
+        ),
+        "mlx": BackendConfig(
+            backend_class="mlx",
+            base_url=S.MLX_BASE_URL,
+            description="Default MLX backend",
+            supported_capabilities=["chat", "embeddings"],
+            concurrency_limits={"chat": 2, "embeddings": 2},
+            health_liveness="/healthz",
+            health_readiness="/readyz",
+            payload_policy={},
+        ),
+    }
+    return BackendRegistry(backends=backends, legacy_mapping={})
+
+
+# Global registry and admission controller
+_registry: Optional[BackendRegistry] = None
+_admission: Optional[AdmissionController] = None
+
+
+def init_backends():
+    """Initialize backend registry and admission controller. Call at startup."""
+    global _registry, _admission
+    _registry = load_backends_config()
+    _admission = AdmissionController(_registry)
+    logger.info("Backend registry and admission control initialized")
+
+
+def get_registry() -> BackendRegistry:
+    """Get the global backend registry."""
+    if _registry is None:
+        raise RuntimeError("Backend registry not initialized. Call init_backends() first.")
+    return _registry
+
+
+def get_admission_controller() -> AdmissionController:
+    """Get the global admission controller."""
+    if _admission is None:
+        raise RuntimeError("Admission controller not initialized. Call init_backends() first.")
+    return _admission
+
+
+async def check_capability(backend_class: str, route_kind: RouteKind):
+    """Check if a backend supports a capability. Raises HTTPException if not."""
+    registry = get_registry()
+    backend = registry.get_backend(backend_class)
+    
+    if backend is None:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "backend_not_found",
+                "backend_class": backend_class,
+                "message": f"Backend {backend_class} is not configured",
+            },
+        )
+    
+    if not backend.supports(route_kind):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "capability_not_supported",
+                "backend_class": backend_class,
+                "route_kind": route_kind,
+                "message": f"Backend {backend_class} does not support {route_kind}",
+                "supported_capabilities": backend.supported_capabilities,
+            },
+        )

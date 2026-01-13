@@ -11,6 +11,8 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.auth import require_bearer
 from app.config import S, logger
+from app.backends import get_admission_controller, check_capability, get_registry
+from app.health_checker import check_backend_ready
 from app.models import (
     ChatCompletionRequest,
     ChatMessage,
@@ -175,82 +177,101 @@ async def chat_completions(req: Request):
     )
     backend: Literal["ollama", "mlx"] = route.backend
     model_name = route.model
+    
+    # Resolve to backend_class for capability gating and admission control
+    registry = get_registry()
+    backend_class = registry.resolve_backend_class(backend)
+    
+    # Check backend health/readiness
+    check_backend_ready(backend_class)
+    
+    # Check capability
+    await check_capability(backend_class, "chat")
+    
+    # Acquire admission slot
+    admission = get_admission_controller()
+    await admission.acquire(backend_class, "chat")
 
-    # Request instrumentation metadata (used by middleware JSONL logger).
     try:
-        inst = getattr(req.state, "instrument", None)
-        if not isinstance(inst, dict):
-            inst = {}
-        inst.update(
-            {
-                "op": "chat.completions",
-                "backend": backend,
-                "upstream_model": model_name,
-                "router_reason": route.reason,
-                "has_tools": bool(cc.tools),
-            }
+        # Request instrumentation metadata (used by middleware JSONL logger).
+        try:
+            inst = getattr(req.state, "instrument", None)
+            if not isinstance(inst, dict):
+                inst = {}
+            inst.update(
+                {
+                    "op": "chat.completions",
+                    "backend": backend,
+                    "backend_class": backend_class,
+                    "upstream_model": model_name,
+                    "router_reason": route.reason,
+                    "has_tools": bool(cc.tools),
+                }
+            )
+            req.state.instrument = inst
+        except Exception:
+            pass
+
+        alias_name = _selected_alias_name(cc.model, route.reason)
+        cc = _apply_alias_constraints(cc, alias_name=alias_name)
+
+        logger.debug(
+            "route chat.completions model=%r stream=%s tools=%s -> backend=%s upstream_model=%s reason=%s",
+            cc.model,
+            bool(cc.stream),
+            bool(cc.tools),
+            backend,
+            model_name,
+            route.reason,
         )
-        req.state.instrument = inst
-    except Exception:
-        pass
 
-    alias_name = _selected_alias_name(cc.model, route.reason)
-    cc = _apply_alias_constraints(cc, alias_name=alias_name)
+        if cc.stream and cc.tools:
+            raise HTTPException(status_code=400, detail="stream=true not supported when tools are provided")
 
-    logger.debug(
-        "route chat.completions model=%r stream=%s tools=%s -> backend=%s upstream_model=%s reason=%s",
-        cc.model,
-        bool(cc.stream),
-        bool(cc.tools),
-        backend,
-        model_name,
-        route.reason,
-    )
+        cc_routed = ChatCompletionRequest(
+            model=model_name if backend == "mlx" else cc.model,
+            messages=cc.messages,
+            tools=cc.tools,
+            tool_choice=cc.tool_choice,
+            temperature=cc.temperature,
+            max_tokens=cc.max_tokens,
+            stream=False,
+        )
 
-    if cc.stream and cc.tools:
-        raise HTTPException(status_code=400, detail="stream=true not supported when tools are provided")
+        if cc.stream:
+            if backend == "mlx":
+                payload = cc_routed.model_dump(exclude_none=True)
+                payload["stream"] = True
+                gen = stream_mlx_openai_chat(payload)
+            else:
+                gen = stream_ollama_chat_as_openai(cc, model_name)
 
-    cc_routed = ChatCompletionRequest(
-        model=model_name if backend == "mlx" else cc.model,
-        messages=cc.messages,
-        tools=cc.tools,
-        tool_choice=cc.tool_choice,
-        temperature=cc.temperature,
-        max_tokens=cc.max_tokens,
-        stream=False,
-    )
+            out = StreamingResponse(gen, media_type="text/event-stream")
+            out.headers["X-Backend-Used"] = backend
+            out.headers["X-Model-Used"] = model_name
+            out.headers["X-Router-Reason"] = route.reason
+            return out
 
-    if cc.stream:
-        if backend == "mlx":
-            payload = cc_routed.model_dump(exclude_none=True)
-            payload["stream"] = True
-            gen = stream_mlx_openai_chat(payload)
+        t0 = time.monotonic()
+        if cc.tools:
+            resp = await tool_loop(cc, backend, model_name, allowed_tools=allowed_tools)
         else:
-            gen = stream_ollama_chat_as_openai(cc, model_name)
+            resp = await (call_mlx_openai(cc_routed) if backend == "mlx" else call_ollama(cc, model_name))
+        try:
+            inst = getattr(req.state, "instrument", None)
+            if isinstance(inst, dict):
+                inst["upstream_ms"] = round((time.monotonic() - t0) * 1000.0, 1)
+        except Exception:
+            pass
 
-        out = StreamingResponse(gen, media_type="text/event-stream")
+        out = JSONResponse(resp)
         out.headers["X-Backend-Used"] = backend
         out.headers["X-Model-Used"] = model_name
         out.headers["X-Router-Reason"] = route.reason
         return out
-
-    t0 = time.monotonic()
-    if cc.tools:
-        resp = await tool_loop(cc, backend, model_name, allowed_tools=allowed_tools)
-    else:
-        resp = await (call_mlx_openai(cc_routed) if backend == "mlx" else call_ollama(cc, model_name))
-    try:
-        inst = getattr(req.state, "instrument", None)
-        if isinstance(inst, dict):
-            inst["upstream_ms"] = round((time.monotonic() - t0) * 1000.0, 1)
-    except Exception:
-        pass
-
-    out = JSONResponse(resp)
-    out.headers["X-Backend-Used"] = backend
-    out.headers["X-Model-Used"] = model_name
-    out.headers["X-Router-Reason"] = route.reason
-    return out
+    finally:
+        # Release admission slot
+        admission.release(backend_class, "chat")
 
 
 @router.post("/v1/completions")

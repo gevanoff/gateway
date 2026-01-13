@@ -1,0 +1,58 @@
+# Backend configuration: defines backend classes, capabilities, and enforcement policies
+# This is the single source of truth for routing, admission control, and payload policies
+
+backends:
+  local_mlx:
+    class: local_mlx
+    base_url: http://127.0.0.1:10240/v1
+    description: macOS Nexa (MLX) - local inference
+    supported_capabilities:
+      - chat
+      - embeddings
+    concurrency_limits:
+      chat: 2
+      embeddings: 2
+    health:
+      liveness: /healthz
+      readiness: /readyz
+    payload_policy:
+      # MLX doesn't generate images
+      images_format: null
+
+  gpu_fast:
+    class: gpu_fast
+    base_url: http://ai1.local:11434
+    description: ai1 - RTX 5060 Ti, 16GB VRAM
+    supported_capabilities:
+      - chat
+      - embeddings
+    concurrency_limits:
+      chat: 4
+      embeddings: 4
+    health:
+      liveness: /healthz
+      readiness: /readyz
+    payload_policy:
+      images_format: null
+
+  gpu_heavy:
+    class: gpu_heavy
+    base_url: http://ada2.local:7860
+    description: ada2 - RTX 6000 Ada, 46GB VRAM
+    supported_capabilities:
+      - images
+    concurrency_limits:
+      images: 2
+    health:
+      liveness: /healthz
+      readiness: /readyz
+    payload_policy:
+      # Images default to URL, only allow base64 when explicitly requested
+      images_format: url
+      images_allow_base64: true
+      images_max_bytes: 50000000
+
+# Legacy backend names map to backend classes
+legacy_mapping:
+  ollama: gpu_fast
+  mlx: local_mlx

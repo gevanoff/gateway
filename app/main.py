@@ -59,8 +59,21 @@ async def _startup_check_models() -> None:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    # Initialize backend registry and admission control
+    from app.backends import init_backends
+    from app.health_checker import init_health_checker, start_health_checker, stop_health_checker
+    
+    init_backends()
+    init_health_checker()
+    
+    # Start background health checking
+    await start_health_checker()
+    
     await _startup_check_models()
     yield
+    
+    # Stop health checker on shutdown
+    await stop_health_checker()
 
 
 app = FastAPI(title="Local AI Gateway", version="0.1", lifespan=lifespan)

@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Literal, Tuple
 import httpx
 
 from app.config import S
+from app.image_storage import convert_response_to_urls
 
 
 def _parse_size(size: str) -> Tuple[int, int]:
@@ -60,6 +61,7 @@ async def generate_images(
     n: int = 1,
     model: str | None = None,
     options: Dict[str, Any] | None = None,
+    response_format: str = "url",
 ) -> Dict[str, Any]:
     """Generate images in an OpenAI-ish response shape.
 
@@ -67,7 +69,16 @@ async def generate_images(
             - mock: returns a placeholder SVG (always available)
             - http_a1111: proxies to an Automatic1111-compatible API (txt2img)
             - http_openai_images: proxies to an OpenAI-style images server (POST /v1/images/generations)
+        
+        Response format:
+            - url: Return URLs to stored images (default, enforces payload policy)
+            - b64_json: Return base64-encoded images (only when explicitly requested)
     """
+
+    # Normalize response_format
+    response_format = (response_format or "url").strip().lower()
+    if response_format not in {"url", "b64_json"}:
+        raise ValueError(f"response_format must be 'url' or 'b64_json', got: {response_format}")
 
     n = int(n or 1)
     n = max(1, min(n, 4))
@@ -205,6 +216,11 @@ async def generate_images(
         data = [{"b64_json": images[i]} for i in range(min(n, len(images)))]
         resp: Dict[str, Any] = {"created": int(time.time()), "data": data}
         resp["_gateway"] = {"backend": backend, "mime": "image/png"}
+        
+        # Enforce response format policy
+        if response_format == "url":
+            resp = convert_response_to_urls(resp)
+        
         return resp
 
     if backend == "http_openai_images":
@@ -292,10 +308,20 @@ async def generate_images(
         upstream_meta = _extract_upstream_meta(out)
         if upstream_meta:
             resp2["_gateway"].update({"upstream": upstream_meta})
+        
+        # Enforce response format policy
+        if response_format == "url":
+            resp2 = convert_response_to_urls(resp2)
+        
         return resp2
 
     # Default: mock
     svg_bytes = _mock_svg(prompt, width, height)
     data = [{"b64_json": _b64(svg_bytes)} for _ in range(n)]
     resp = {"created": int(time.time()), "data": data, "_gateway": {"backend": "mock", "mime": "image/svg+xml"}}
+    
+    # Enforce response format policy
+    if response_format == "url":
+        resp = convert_response_to_urls(resp)
+    
     return resp
