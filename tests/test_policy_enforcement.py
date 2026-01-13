@@ -1,9 +1,13 @@
 """Tests for backend policy enforcement: routing, concurrency, and payload policies."""
 
 import asyncio
+import os
 import pytest
 from fastapi import HTTPException
 from unittest.mock import AsyncMock, Mock, patch
+
+# Ensure config is set before importing app modules
+os.environ.setdefault("GATEWAY_BEARER_TOKEN", "test-token")
 
 from app.backends import (
     BackendConfig,
