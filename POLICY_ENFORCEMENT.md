@@ -17,9 +17,21 @@ Three backend classes are defined:
 |--------------|----------|--------------|-------------------|
 | `local_mlx` | macOS Nexa (MLX) | chat, embeddings | chat: 2, embeddings: 2 |
 | `gpu_fast` | ai1 (RTX 5060 Ti, 16GB) | chat, embeddings | chat: 4, embeddings: 4 |
-| `gpu_heavy` | ada2 (RTX 6000 Ada, 46GB) | images | images: 2 |
+| `gpu_heavy` | ada2 (RTX 6000 Ada, 46GB) | **images only** | images: 2 |
 
 Legacy backend names (`ollama`, `mlx`) are mapped to their backend classes for compatibility.
+
+### Image Generation Backend (ada2)
+
+**Important:** Image generation uses **only** `gpu_heavy` (ada2) with InvokeAI/ComfyUI. The previous Nexa/MLX image generation on macOS is **no longer used**.
+
+- **Hardware**: RTX 6000 Ada (46GB VRAM)
+- **Software**: InvokeAI (recommended) or ComfyUI
+- **Models**: SDXL (1024x1024) or SD 1.5 (512x512)
+- **Endpoint**: `http://ada2.local:7860`
+- **Health endpoints**: `/healthz` (liveness), `/readyz` (readiness)
+
+For setup instructions, see [IMAGE_BACKEND_SETUP.md](IMAGE_BACKEND_SETUP.md).
 
 ## Configuration
 
@@ -60,10 +72,16 @@ backends:
 # Images backend class (for admission control)
 IMAGES_BACKEND_CLASS=gpu_heavy
 
-# Images backend implementation
+# Images backend implementation (InvokeAI or ComfyUI on ada2)
 IMAGES_BACKEND=http_openai_images
 IMAGES_HTTP_BASE_URL=http://ada2.local:7860
+IMAGES_OPENAI_MODEL=sd-xl-base-1.0  # or sd-v1-5
+
+# Image storage directory (content-addressed)
+UI_IMAGE_DIR=/var/lib/gateway/data/ui_images
 ```
+
+See [ada2-images.env.example](../ai-infra/services/gateway/env/ada2-images.env.example) for a complete configuration.
 
 ## Enforcement Behavior
 
