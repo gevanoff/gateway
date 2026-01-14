@@ -52,8 +52,14 @@ def store_image_and_get_url(b64_data: str, mime_type: str = "image/png") -> str:
             f.write(image_bytes)
         
         # Return URL path (served by the gateway)
-        # The UI routes already handle serving from UI_IMAGE_DIR
-        url = f"/ui/images/{filename}"
+        # The UI routes already handle serving from UI_IMAGE_DIR.
+        url_path = f"/ui/images/{filename}"
+
+        public_base = (getattr(S, "PUBLIC_BASE_URL", "") or "").strip().rstrip("/")
+        if public_base:
+            url = f"{public_base}{url_path}"
+        else:
+            url = url_path
         
         logger.debug(f"Stored image: {filename} ({len(image_bytes)} bytes)")
         return url
