@@ -99,7 +99,7 @@ def _check_openai_images(images_base: str, *, model: str) -> None:
 def _check_gateway_images(gateway_base: str, token: str) -> None:
     base = gateway_base.rstrip("/")
     headers = {"authorization": f"Bearer {token}"}
-    payload = {"prompt": "gateway verify_images smoke test", "size": "256x256", "n": 1}
+    payload = {"prompt": "gateway verify_images smoke test", "size": "256x256", "n": 1, "response_format": "b64_json"}
 
     status, _h, out = _http_json("POST", f"{base}/v1/images/generations", headers=headers, body=payload, timeout_sec=120)
     if status != 200:
@@ -112,7 +112,7 @@ def _check_gateway_images(gateway_base: str, token: str) -> None:
 
 def _check_ui_image(gateway_base: str) -> None:
     base = gateway_base.rstrip("/")
-    payload = {"prompt": "gateway verify_images ui smoke test", "size": "256x256", "n": 1}
+    payload = {"prompt": "gateway verify_images ui smoke test", "size": "256x256", "n": 1, "response_format": "b64_json"}
 
     status, _h, out = _http_json("POST", f"{base}/ui/api/image", body=payload, timeout_sec=120)
     if status != 200:
