@@ -21,7 +21,7 @@ backends:
 
   gpu_fast:
     class: gpu_fast
-    base_url: http://ai1.local:11434
+    base_url: http://ai1:11434
     description: ai1 - RTX 5060 Ti, 16GB VRAM
     supported_capabilities:
       - chat
@@ -37,7 +37,7 @@ backends:
 
   gpu_heavy:
     class: gpu_heavy
-    base_url: http://ada2.local:7860
+    base_url: http://ada2:7860
     description: ada2 - RTX 6000 Ada, 46GB VRAM
     supported_capabilities:
       - images

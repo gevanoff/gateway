@@ -35,7 +35,7 @@ def test_registry():
         ),
         "gpu_fast": BackendConfig(
             backend_class="gpu_fast",
-            base_url="http://ai1.local:11434",
+            base_url="http://ai1:11434",
             description="Test Fast GPU",
             supported_capabilities=["chat", "embeddings"],
             concurrency_limits={"chat": 4, "embeddings": 4},
@@ -45,7 +45,7 @@ def test_registry():
         ),
         "gpu_heavy": BackendConfig(
             backend_class="gpu_heavy",
-            base_url="http://ada2.local:7860",
+            base_url="http://ada2:7860",
             description="Test Heavy GPU",
             supported_capabilities=["images"],
             concurrency_limits={"images": 2},
