@@ -35,6 +35,22 @@ backends:
     payload_policy:
       images_format: null
 
+  ollama:
+    class: ollama
+    base_url: http://127.0.0.1:11434
+    description: localhost Ollama
+    supported_capabilities:
+      - chat
+      - embeddings
+    concurrency_limits:
+      chat: 4
+      embeddings: 4
+    health:
+      liveness: /healthz
+      readiness: /readyz
+    payload_policy:
+      images_format: null
+
   gpu_heavy:
     class: gpu_heavy
     base_url: http://ada2:7860
@@ -54,5 +70,4 @@ backends:
 
 # Legacy backend names map to backend classes
 legacy_mapping:
-  ollama: gpu_fast
   mlx: local_mlx
