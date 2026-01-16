@@ -20,20 +20,20 @@ backends:
       images_format: null
 
   gpu_fast:
-    # class: gpu_fast
-    # base_url: http://ai1:11434
-    # description: ai1 - RTX 5060 Ti, 16GB VRAM
-    # supported_capabilities:
-    #   - chat
-    #   - embeddings
-    # concurrency_limits:
-    #   chat: 4
-    #   embeddings: 4
-    # health:
-    #   liveness: /healthz
-    #   readiness: /readyz
-    # payload_policy:
-    #   images_format: null
+    class: gpu_fast
+    base_url: http://ai1:11434
+    description: ai1 - RTX 5060 Ti, 16GB VRAM
+    supported_capabilities:
+      - chat
+      - embeddings
+    concurrency_limits:
+      chat: 4
+      embeddings: 4
+    health:
+      liveness: /healthz
+      readiness: /readyz
+    payload_policy:
+      images_format: null
 
   ollama:
     class: ollama
