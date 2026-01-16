@@ -13,8 +13,10 @@ backends:
       chat: 2
       embeddings: 2
     health:
-      liveness: /healthz
-      readiness: /readyz
+      # OpenAI-style servers commonly expose /models but not /healthz.
+      # Use /models as a lightweight liveness/readiness signal.
+      liveness: /models
+      readiness: /models
     payload_policy:
       # MLX doesn't generate images
       images_format: null
