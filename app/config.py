@@ -60,6 +60,8 @@ class Settings(BaseSettings):
     IMAGES_A1111_STEPS: int = 20
     IMAGES_MAX_PIXELS: int = 2_000_000
     IMAGES_OPENAI_MODEL: str = ""
+    # Note: Some OpenAI-ish image servers require a model, but others (like the
+    # InvokeAI OpenAI-images shim) can use their own configured default if omitted.
 
     DEFAULT_BACKEND: Literal["ollama", "mlx"] = "ollama"
 

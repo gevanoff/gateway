@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import socket
@@ -214,7 +215,7 @@ def _stop_process(proc: subprocess.Popen, *, timeout_sec: float = 5.0) -> None:
             pass
 
 
-def _run_http_checks(*, base_url: str, token: str, require_backend: bool) -> list[CheckResult]:
+def _run_http_checks(*, base_url: str, token: str, require_backend: bool, check_images: bool) -> list[CheckResult]:
     results: list[CheckResult] = []
 
     def ok(name: str, detail: str = "") -> None:
@@ -257,6 +258,64 @@ def _run_http_checks(*, base_url: str, token: str, require_backend: bool) -> lis
 
     # OpenAI-ish endpoints
     v1 = base_url.rstrip("/") + "/v1"
+
+    def _check_images() -> CheckResult:
+        try:
+            # Default should be URL (policy: avoid b64 unless explicitly requested).
+            payload = {"prompt": "verify_gateway images url", "size": "256x256", "n": 1}
+            status, _h, body = _http_request(
+                "POST",
+                f"{v1}/images/generations",
+                headers=bearer,
+                json_body=payload,
+                timeout_sec=120.0,
+                max_body_bytes=2_000_000,
+            )
+            if status != 200:
+                return CheckResult(
+                    name="images_url",
+                    ok=False,
+                    detail=f"status={status} body={body[:400].decode('utf-8', errors='replace')}",
+                )
+            out = _json_from_bytes(body)
+            data = out.get("data") if isinstance(out, dict) else None
+            if not (isinstance(data, list) and data and isinstance(data[0], dict)):
+                return CheckResult(name="images_url", ok=False, detail="missing data[0]")
+            if "url" not in data[0]:
+                return CheckResult(name="images_url", ok=False, detail="expected data[0].url")
+            if "b64_json" in data[0]:
+                return CheckResult(name="images_url", ok=False, detail="unexpected data[0].b64_json")
+
+            # Explicit b64_json should return PNG-ish bytes.
+            payload2 = {"prompt": "verify_gateway images b64", "size": "256x256", "n": 1, "response_format": "b64_json"}
+            status, _h, body = _http_request(
+                "POST",
+                f"{v1}/images/generations",
+                headers=bearer,
+                json_body=payload2,
+                timeout_sec=120.0,
+                max_body_bytes=8_000_000,
+            )
+            if status != 200:
+                return CheckResult(
+                    name="images_b64",
+                    ok=False,
+                    detail=f"status={status} body={body[:400].decode('utf-8', errors='replace')}",
+                )
+            out2 = _json_from_bytes(body)
+            data2 = out2.get("data") if isinstance(out2, dict) else None
+            if not (isinstance(data2, list) and data2 and isinstance(data2[0], dict) and isinstance(data2[0].get("b64_json"), str)):
+                return CheckResult(name="images_b64", ok=False, detail="missing data[0].b64_json")
+            raw = base64.b64decode(data2[0]["b64_json"].encode("ascii"))
+            if not raw.startswith(b"\x89PNG\r\n\x1a\n"):
+                return CheckResult(name="images_b64", ok=False, detail="b64 did not decode to PNG header")
+
+            return CheckResult(name="images", ok=True, detail="url default + b64_json OK")
+        except Exception as e:
+            return CheckResult(name="images", ok=False, detail=f"{type(e).__name__}: {e}")
+
+    if check_images:
+        results.append(_check_images())
 
     try:
         status, _h, body = _http_request("GET", v1 + "/models", headers=bearer)
@@ -620,6 +679,11 @@ def main(argv: list[str]) -> int:
         action="store_true",
         help="Do not auto-start uvicorn (requires --base-url).",
     )
+    p.add_argument(
+        "--check-images",
+        action="store_true",
+        help="Also smoke-test /v1/images/generations (url default + b64_json when requested).",
+    )
     ns = p.parse_args(argv)
 
     token = (ns.token or "").strip() or _env_gateway_token()
@@ -683,7 +747,12 @@ def main(argv: list[str]) -> int:
             return _print_results(results)
 
     try:
-        http_results = _run_http_checks(base_url=base_url, token=token, require_backend=ns.require_backend)
+        http_results = _run_http_checks(
+            base_url=base_url,
+            token=token,
+            require_backend=ns.require_backend,
+            check_images=bool(ns.check_images),
+        )
         results.extend(http_results)
     finally:
         if proc is not None:

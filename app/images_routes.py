@@ -32,10 +32,7 @@ async def images_generations(req: Request):
     # For now, enforce against the configured images backend
     from app.config import S
     
-    # Map current IMAGES_BACKEND to backend_class
-    backend_class = "gpu_heavy"  # Default assumption for image generation
-    if hasattr(S, "IMAGES_BACKEND_CLASS"):
-        backend_class = S.IMAGES_BACKEND_CLASS
+    backend_class = (getattr(S, "IMAGES_BACKEND_CLASS", "") or "").strip() or "gpu_heavy"
     
     # Check backend health/readiness
     check_backend_ready(backend_class)

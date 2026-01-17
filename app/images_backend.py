@@ -10,6 +10,39 @@ from app.config import S
 from app.image_storage import convert_response_to_urls
 
 
+def _effective_images_http_base_url() -> str:
+    """Return the base URL for the configured images HTTP backend.
+
+    Prefer explicit IMAGES_HTTP_BASE_URL, but if it appears to be the loopback default
+    and an IMAGES_BACKEND_CLASS is configured in backends_config.yaml, derive from that
+    backend's base_url to avoid config drift.
+    """
+
+    raw = (getattr(S, "IMAGES_HTTP_BASE_URL", "") or "").strip().rstrip("/")
+    if not raw:
+        return ""
+
+    # If user explicitly configured a non-loopback URL, honor it.
+    loopbacks = ("http://127.0.0.1", "http://localhost", "https://127.0.0.1", "https://localhost")
+    if not any(raw.startswith(p) for p in loopbacks):
+        return raw
+
+    backend_class = (getattr(S, "IMAGES_BACKEND_CLASS", "") or "").strip() or "gpu_heavy"
+    try:
+        from app.backends import get_registry
+
+        reg = get_registry()
+        cfg = reg.get_backend(backend_class)
+        if cfg and isinstance(cfg.base_url, str) and cfg.base_url.strip():
+            derived = cfg.base_url.strip().rstrip("/")
+            if derived and not any(derived.startswith(p) for p in loopbacks):
+                return derived
+    except Exception:
+        pass
+
+    return raw
+
+
 def _parse_size(size: str) -> Tuple[int, int]:
     s = (size or "").strip().lower()
     if not s:
@@ -188,7 +221,7 @@ async def generate_images(
         return False
 
     if backend == "http_a1111":
-        base = (getattr(S, "IMAGES_HTTP_BASE_URL", "") or "").strip().rstrip("/")
+        base = _effective_images_http_base_url()
         if not base:
             raise RuntimeError("IMAGES_HTTP_BASE_URL is required for http_a1111")
 
@@ -224,22 +257,24 @@ async def generate_images(
         return resp
 
     if backend == "http_openai_images":
-        base = (getattr(S, "IMAGES_HTTP_BASE_URL", "") or "").strip().rstrip("/")
+        base = _effective_images_http_base_url()
         if not base:
             raise RuntimeError("IMAGES_HTTP_BASE_URL is required for http_openai_images")
 
         timeout = float(getattr(S, "IMAGES_HTTP_TIMEOUT_SEC", 120.0) or 120.0)
         chosen_model = (model or "").strip() or (getattr(S, "IMAGES_OPENAI_MODEL", "") or "").strip()
-        if not chosen_model:
-            raise RuntimeError("model is required for http_openai_images (set IMAGES_OPENAI_MODEL or pass model)")
 
         payload: Dict[str, Any] = {
-            "model": chosen_model,
             "prompt": prompt,
             "n": n,
             "size": f"{width}x{height}",
             "response_format": "b64_json",
         }
+
+        # Some OpenAI-ish image servers require `model`, but InvokeAI's shim can use a
+        # configured default model. Only send the field when we have one.
+        if chosen_model:
+            payload["model"] = chosen_model
 
         # Only include extra knobs if explicitly provided by the caller.
         filtered = _filtered_options(options)
@@ -253,7 +288,7 @@ async def generate_images(
         # did not already specify any guidance/cfg.
         guidance_used: float | None = None
         guidance_auto: bool = False
-        if ("turbo" in chosen_model.lower()) and not _has_guidance(filtered):
+        if chosen_model and ("turbo" in chosen_model.lower()) and not _has_guidance(filtered):
             payload["guidance_scale"] = 0.0
             payload.setdefault("cfg_scale", 0.0)
             guidance_used = 0.0
@@ -287,7 +322,9 @@ async def generate_images(
             raise RuntimeError("image backend did not return b64_json")
 
         resp2: Dict[str, Any] = {"created": int(out.get("created") or time.time()), "data": normalized}
-        resp2["_gateway"] = {"backend": backend, "mime": "image/png", "model": chosen_model}
+        resp2["_gateway"] = {"backend": backend, "mime": "image/png"}
+        if chosen_model:
+            resp2["_gateway"].update({"model": chosen_model})
         if guidance_used is not None:
             resp2["_gateway"].update({"guidance_scale": guidance_used, "guidance_auto": guidance_auto})
 

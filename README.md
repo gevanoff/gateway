@@ -28,7 +28,8 @@ The gateway exposes an OpenAI-ish images endpoint:
 IMAGES_BACKEND=http_openai_images
 IMAGES_BACKEND_CLASS=gpu_heavy
 IMAGES_HTTP_BASE_URL=http://ada2.local:7860
-IMAGES_OPENAI_MODEL=sd-xl-base-1.0
+# Optional: if omitted, upstream may use its own default (e.g. InvokeAI shim)
+# IMAGES_OPENAI_MODEL=sd-xl-base-1.0
 UI_IMAGE_DIR=/var/lib/gateway/data/ui_images
 ```
 
@@ -60,6 +61,12 @@ Smoke test (bearer-protected):
 
 ```bash
 python tools/verify_images.py --gateway-base-url http://127.0.0.1:8800 --token <token> --also-check-a1111 http://127.0.0.1:7860
+```
+
+Or run the full verifier (includes many gateway checks), with images enabled:
+
+```bash
+python tools/verify_gateway.py --check-images
 ```
 
 Integration tests:
