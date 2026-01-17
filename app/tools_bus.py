@@ -24,6 +24,7 @@ except Exception:  # pragma: no cover
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.concurrency import run_in_threadpool
 
 from app.auth import require_bearer
 from app.config import S
@@ -1585,7 +1586,12 @@ async def v1_tools_dispatch(req: Request):
                 "error_message": "arguments must be an object",
             },
         )
-    return _execute_tool(name.strip(), args, allowed_tools=_allowed_tool_names_for_req(req))
+    return await run_in_threadpool(
+        _execute_tool,
+        name.strip(),
+        args,
+        allowed_tools=_allowed_tool_names_for_req(req),
+    )
 
 
 @router.post("/v1/tools/{name}")
@@ -1594,4 +1600,9 @@ async def v1_tools_exec(req: Request, name: str):
     _rate_limit(req)
     body = await req.json()
     tr = ToolExecRequest(**body)
-    return _execute_tool(name, tr.arguments, allowed_tools=_allowed_tool_names_for_req(req))
+    return await run_in_threadpool(
+        _execute_tool,
+        name,
+        tr.arguments,
+        allowed_tools=_allowed_tool_names_for_req(req),
+    )
