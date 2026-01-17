@@ -159,6 +159,15 @@ def _wait_for_health(base_url: str, token: str, *, timeout_sec: float = 15.0) ->
 
 
 def _run_pytest(*, cwd: str) -> CheckResult:
+    try:
+        import pytest  # noqa: F401
+    except Exception:
+        return CheckResult(
+            name="pytest",
+            ok=True,
+            detail="skipped (pytest not installed; use --skip-pytest or install requirements-dev.txt)",
+        )
+
     cp = subprocess.run(
         [sys.executable, "-m", "pytest", "-q"],
         cwd=cwd,

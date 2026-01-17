@@ -65,7 +65,7 @@ This migration removes image generation from the macOS Nexa/MLX backend and rout
 5. **Verify**
    ```bash
    curl http://ada2:7860/healthz
-   curl -X POST http://ada2:7860/api/v1/images/generations \
+   curl -X POST http://ada2:7860/v1/images/generations \
      -H "Content-Type: application/json" \
      -d '{"model": "sd-xl-base-1.0", "prompt": "test", "size": "512x512"}'
    ```

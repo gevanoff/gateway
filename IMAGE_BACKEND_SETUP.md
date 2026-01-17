@@ -141,7 +141,12 @@ sudo systemctl start invokeai
 
 ### 6. Add Health Endpoints
 
-InvokeAI doesn't provide /healthz by default. Add a simple proxy with nginx:
+InvokeAI doesn't provide `/healthz` by default, and its native API is not OpenAI Images-compatible.
+
+Recommended: run the InvokeAI OpenAI Images shim on the same host and add a simple nginx proxy that exposes:
+- `/healthz` (liveness)
+- `/readyz` (readiness; proxies to the shim)
+- `POST /v1/images/generations` (OpenAI Images; proxies to the shim)
 
 Create `/etc/nginx/sites-available/invokeai`:
 
@@ -159,11 +164,23 @@ server {
 
     location /readyz {
         access_log off;
-        # Check if InvokeAI backend is responding
-        proxy_pass http://127.0.0.1:9090/api/v1/models;
-        proxy_method GET;
-        proxy_pass_request_body off;
-        proxy_set_header Content-Length "";
+      # Readiness is implemented by the shim (it checks InvokeAI + config)
+      proxy_pass http://127.0.0.1:9091/readyz;
+    }
+
+    # OpenAI Images-compatible endpoint for the gateway
+    location = /v1/images/generations {
+      proxy_pass http://127.0.0.1:9091/v1/images/generations;
+      proxy_http_version 1.1;
+      proxy_set_header Host $host;
+      proxy_set_header X-Real-IP $remote_addr;
+      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+      proxy_set_header X-Forwarded-Proto $scheme;
+
+      # Increase timeouts for image generation
+      proxy_connect_timeout 300s;
+      proxy_send_timeout 300s;
+      proxy_read_timeout 300s;
     }
 
     # Proxy to InvokeAI
@@ -204,7 +221,10 @@ Set in gateway environment (`.env` or environment variables):
 IMAGES_BACKEND=http_openai_images
 IMAGES_BACKEND_CLASS=gpu_heavy
 IMAGES_HTTP_BASE_URL=http://ada2:7860
-IMAGES_OPENAI_MODEL=sd-xl-base-1.0
+
+# Optional: some OpenAI-ish image servers require a model, but the InvokeAI shim can use
+# the default model embedded in its graph template.
+# IMAGES_OPENAI_MODEL=sd-xl-base-1.0
 
 # Or for SD 1.5:
 # IMAGES_OPENAI_MODEL=sd-v1-5
@@ -226,11 +246,13 @@ The `backends_config.yaml` is already configured:
 # Health check
 curl http://ada2:7860/healthz
 
-# Generate test image
-curl -X POST http://ada2:7860/api/v1/images/generations \
+# Readiness check (nginx -> shim -> invokeai)
+curl http://ada2:7860/readyz
+
+# Generate test image (OpenAI Images via shim)
+curl -X POST http://ada2:7860/v1/images/generations \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "sd-xl-base-1.0",
     "prompt": "a beautiful sunset over mountains",
     "n": 1,
     "size": "1024x1024",
@@ -341,6 +363,49 @@ Once ada2 is working:
 - Check health endpoints: `curl http://ada2:7860/healthz`
 - Check InvokeAI API: `curl http://ada2:7860/api/v1/models`
 - Wait 30s for gateway health check to update
+
+## Ops Checklist (InvokeAI shim + gateway)
+
+### On the image host (ada2)
+
+```bash
+# nginx up?
+curl -sf http://127.0.0.1:7860/healthz
+
+# shim readiness (nginx -> shim -> invokeai)
+curl -sf http://127.0.0.1:7860/readyz
+
+# OpenAI Images endpoint works and returns base64 when requested
+curl -sS -X POST http://127.0.0.1:7860/v1/images/generations \
+  -H "Content-Type: application/json" \
+  -d '{"prompt":"ops smoke test","response_format":"b64_json","n":1,"size":"512x512"}'
+```
+
+If using the “save last image” knob in the shim:
+
+```bash
+# Example path; depends on SHIM_SAVE_LAST_IMAGE_PATH
+file /var/lib/invokeai/openai_images_shim/last.png
+```
+
+### On the gateway host
+
+- Ensure env vars are set:
+  - `IMAGES_BACKEND=http_openai_images`
+  - `IMAGES_BACKEND_CLASS=gpu_heavy`
+  - `IMAGES_HTTP_BASE_URL=http://ada2:7860`
+  - `IMAGES_OPENAI_MODEL` is optional for the InvokeAI shim
+- Ensure `/var/lib/gateway/data/ui_images` exists and is writable by the gateway user (for URL responses).
+
+Verify end-to-end:
+
+```bash
+# From gateway/ (starts uvicorn if needed)
+python tools/verify_gateway.py --check-images
+
+# Or against a running gateway:
+python tools/verify_gateway.py --base-url http://127.0.0.1:8800 --token "$GATEWAY_BEARER_TOKEN" --check-images
+```
 
 ### Images are base64 instead of URLs
 - Check request includes `"response_format": "url"` (or omit for default)
