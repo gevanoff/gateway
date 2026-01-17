@@ -307,10 +307,17 @@ def _run_http_checks(*, base_url: str, token: str, require_backend: bool, check_
             if not (isinstance(data2, list) and data2 and isinstance(data2[0], dict) and isinstance(data2[0].get("b64_json"), str)):
                 return CheckResult(name="images_b64", ok=False, detail="missing data[0].b64_json")
             raw = base64.b64decode(data2[0]["b64_json"].encode("ascii"))
-            if not raw.startswith(b"\x89PNG\r\n\x1a\n"):
-                return CheckResult(name="images_b64", ok=False, detail="b64 did not decode to PNG header")
+            if raw.startswith(b"\x89PNG\r\n\x1a\n"):
+                return CheckResult(name="images", ok=True, detail="url default + b64_json PNG OK")
 
-            return CheckResult(name="images", ok=True, detail="url default + b64_json OK")
+            # Mock backend returns SVG; allow it unless appliance/require-backend mode.
+            head = raw[:200].lstrip()
+            if head.startswith(b"<svg") or head.startswith(b"<?xml"):
+                if require_backend:
+                    return CheckResult(name="images", ok=False, detail="got SVG placeholder (backend required)")
+                return CheckResult(name="images", ok=True, detail="got SVG placeholder (IMAGES_BACKEND=mock)")
+
+            return CheckResult(name="images", ok=False, detail="b64 did not decode to PNG/SVG")
         except Exception as e:
             return CheckResult(name="images", ok=False, detail=f"{type(e).__name__}: {e}")
 
