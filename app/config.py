@@ -25,6 +25,10 @@ class Settings(BaseSettings):
     # Policy keys are best-effort and currently used for tool allowlists/rate limits.
     GATEWAY_TOKEN_POLICIES_JSON: str = ""
 
+    # If true and GATEWAY_TOKEN_POLICIES_JSON is set but invalid JSON, fail closed (HTTP 500)
+    # rather than silently ignoring policies.
+    GATEWAY_TOKEN_POLICIES_STRICT: bool = False
+
     # Optional request guardrails.
     # - MAX_REQUEST_BYTES: 0 disables. When enabled, requests exceeding this size return 413.
     # - IP_ALLOWLIST: comma-separated IPs and/or CIDRs (e.g. "127.0.0.1,10.0.0.0/8"). Empty allows all.

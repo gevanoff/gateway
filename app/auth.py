@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import functools
 import ipaddress
 import json
+import logging
 from fastapi import HTTPException, Request
 
 from app.config import S
+
+logger = logging.getLogger(__name__)
 
 
 def _parse_allowlist(raw: str) -> list[ipaddress._BaseNetwork]:  # type: ignore[attr-defined]
@@ -42,21 +46,29 @@ def _client_ip_allowed(req: Request, *, raw_allowlist: str) -> bool:
     return any(ip in net for net in nets)
 
 
-def _load_token_policies() -> dict[str, dict]:
-    raw = (getattr(S, "GATEWAY_TOKEN_POLICIES_JSON", "") or "").strip()
+@functools.lru_cache(maxsize=16)
+def _parse_token_policies(raw: str) -> tuple[dict[str, dict], bool]:
     if not raw:
-        return {}
+        return {}, True
     try:
         obj = json.loads(raw)
-    except Exception:
-        return {}
+    except Exception as e:
+        logger.warning("Invalid GATEWAY_TOKEN_POLICIES_JSON (parse error): %s", e)
+        return {}, False
     if not isinstance(obj, dict):
-        return {}
+        logger.warning("Invalid GATEWAY_TOKEN_POLICIES_JSON (expected object at top-level)")
+        return {}, False
+
     out: dict[str, dict] = {}
     for k, v in obj.items():
         if isinstance(k, str) and k and isinstance(v, dict):
             out[k] = v
-    return out
+    return out, True
+
+
+def _load_token_policies() -> tuple[dict[str, dict], bool]:
+    raw = (getattr(S, "GATEWAY_TOKEN_POLICIES_JSON", "") or "").strip()
+    return _parse_token_policies(raw)
 
 
 def bearer_token_from_headers(headers: dict[str, str] | None) -> str:
@@ -73,7 +85,8 @@ def bearer_token_from_headers(headers: dict[str, str] | None) -> str:
 def token_policy_for_token(token: str) -> dict:
     if not isinstance(token, str) or not token.strip():
         return {}
-    return _load_token_policies().get(token.strip(), {})
+    pols, _ok = _load_token_policies()
+    return pols.get(token.strip(), {})
 
 
 def _allowed_bearer_tokens() -> set[str]:
@@ -92,11 +105,15 @@ def require_bearer(req: Request) -> None:
     if token not in _allowed_bearer_tokens():
         raise HTTPException(status_code=403, detail="Invalid bearer token")
 
+    # Load token policies once per request and optionally fail closed if configured.
+    pols, pols_ok = _load_token_policies()
+    if (getattr(S, "GATEWAY_TOKEN_POLICIES_STRICT", False) is True) and (not pols_ok):
+        raise HTTPException(status_code=500, detail="Token policy config invalid")
+
     # Attach token/policy for downstream handlers.
-    policy = {}
+    policy = pols.get(token, {}) if isinstance(pols, dict) else {}
     try:
         req.state.bearer_token = token
-        policy = token_policy_for_token(token)
         req.state.token_policy = policy
     except Exception:
         pass
