@@ -27,7 +27,7 @@ The gateway exposes an OpenAI-ish images endpoint:
 ```bash
 IMAGES_BACKEND=http_openai_images
 IMAGES_BACKEND_CLASS=gpu_heavy
-IMAGES_HTTP_BASE_URL=http://ada2.local:7860
+IMAGES_HTTP_BASE_URL=http://ada2:7860
 # Optional: if omitted, upstream may use its own default (e.g. InvokeAI shim)
 # IMAGES_OPENAI_MODEL=sd-xl-base-1.0
 UI_IMAGE_DIR=/var/lib/gateway/data/ui_images

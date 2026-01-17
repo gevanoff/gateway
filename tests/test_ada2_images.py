@@ -1,7 +1,7 @@
 """Integration tests for ada2 image generation backend.
 
 These tests verify:
-1. Image generation routes to gpu_heavy (ada2.local)
+1. Image generation routes to gpu_heavy (ada2)
 2. URL responses are returned by default
 3. base64 responses work with explicit request
 4. Admission control enforces concurrency limits (429 on overload)
@@ -55,7 +55,7 @@ def mock_ada2_backend(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_routes_to_gpu_heavy_ada2(client, mock_ada2_backend):
-    """Verify image requests route to gpu_heavy (ada2.local)."""
+    """Verify image requests route to gpu_heavy (ada2)."""
     
     response = await client.post(
         "/v1/images/generations",

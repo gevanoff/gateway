@@ -179,7 +179,7 @@ backends:
 
   gpu_heavy:
     class: gpu_heavy
-    base_url: http://ada2.local:7860
+   base_url: http://ada2:7860
     supported_capabilities: [images]
     concurrency_limits:
       images: 2
@@ -195,7 +195,7 @@ Set environment:
 ```bash
 IMAGES_BACKEND_CLASS=gpu_heavy
 IMAGES_BACKEND=http_openai_images
-IMAGES_HTTP_BASE_URL=http://ada2.local:7860
+IMAGES_HTTP_BASE_URL=http://ada2:7860
 ```
 
 ## Success Criteria - All Met ✅

@@ -64,8 +64,8 @@ This migration removes image generation from the macOS Nexa/MLX backend and rout
 
 5. **Verify**
    ```bash
-   curl http://ada2.local:7860/healthz
-   curl -X POST http://ada2.local:7860/api/v1/images/generations \
+   curl http://ada2:7860/healthz
+   curl -X POST http://ada2:7860/api/v1/images/generations \
      -H "Content-Type: application/json" \
      -d '{"model": "sd-xl-base-1.0", "prompt": "test", "size": "512x512"}'
    ```
@@ -77,7 +77,7 @@ This migration removes image generation from the macOS Nexa/MLX backend and rout
    # In /var/lib/gateway/app/.env:
    IMAGES_BACKEND=http_openai_images
    IMAGES_BACKEND_CLASS=gpu_heavy
-   IMAGES_HTTP_BASE_URL=http://ada2.local:7860
+   IMAGES_HTTP_BASE_URL=http://ada2:7860
    IMAGES_OPENAI_MODEL=sd-xl-base-1.0
    UI_IMAGE_DIR=/var/lib/gateway/data/ui_images
    ```
@@ -206,8 +206,8 @@ tail -f /var/lib/gateway/logs/gateway.log | grep -i image
 ### Check Health Status
 ```bash
 # Every 30s, gateway checks:
-# - GET http://ada2.local:7860/healthz
-# - GET http://ada2.local:7860/readyz
+# - GET http://ada2:7860/healthz
+# - GET http://ada2:7860/readyz
 
 curl http://127.0.0.1:8800/v1/gateway/status \
   -H "Authorization: Bearer $TOKEN" | jq .backend_health.gpu_heavy
@@ -233,8 +233,8 @@ If ada2 has issues:
    sudo journalctl -u invokeai -n 100
    
    # Check health endpoints
-   curl http://ada2.local:7860/healthz
-   curl http://ada2.local:7860/readyz
+   curl http://ada2:7860/healthz
+   curl http://ada2:7860/readyz
    ```
 
 3. **Restore ada2 and re-enable**
@@ -299,7 +299,7 @@ gpu_heavy:
 ## Questions?
 
 - InvokeAI not starting? Check [IMAGE_BACKEND_SETUP.md](IMAGE_BACKEND_SETUP.md) troubleshooting section
-- Gateway returning 503? Check health endpoints: `curl http://ada2.local:7860/healthz`
+- Gateway returning 503? Check health endpoints: `curl http://ada2:7860/healthz`
 - Images are base64 instead of URLs? Check `response_format` parameter (default is URL)
 - Slow generation? Try SD 1.5 instead of SDXL, or reduce steps
 

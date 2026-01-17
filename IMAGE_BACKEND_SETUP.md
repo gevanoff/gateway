@@ -94,7 +94,7 @@ InvokeAI:
   Web Server:
     host: 0.0.0.0
     port: 7860
-    allow_origins: ["http://ada2.local:8800", "http://127.0.0.1:8800"]
+    allow_origins: ["http://ada2:8800", "http://127.0.0.1:8800"]
     
   Generation:
     sequential_guidance: false
@@ -148,7 +148,7 @@ Create `/etc/nginx/sites-available/invokeai`:
 ```nginx
 server {
     listen 7860;
-    server_name ada2.local;
+    server_name ada2;
 
     # Health endpoints for gateway
     location /healthz {
@@ -203,7 +203,7 @@ Set in gateway environment (`.env` or environment variables):
 # Point to ada2 InvokeAI
 IMAGES_BACKEND=http_openai_images
 IMAGES_BACKEND_CLASS=gpu_heavy
-IMAGES_HTTP_BASE_URL=http://ada2.local:7860
+IMAGES_HTTP_BASE_URL=http://ada2:7860
 IMAGES_OPENAI_MODEL=sd-xl-base-1.0
 
 # Or for SD 1.5:
@@ -213,7 +213,7 @@ IMAGES_OPENAI_MODEL=sd-xl-base-1.0
 ### Backend Config (already correct)
 
 The `backends_config.yaml` is already configured:
-- `gpu_heavy` points to `http://ada2.local:7860`
+- `gpu_heavy` points to `http://ada2:7860`
 - Supports `images` capability
 - Concurrency limit: 2
 - Payload policy: URL-default with base64 opt-in
@@ -224,10 +224,10 @@ The `backends_config.yaml` is already configured:
 
 ```bash
 # Health check
-curl http://ada2.local:7860/healthz
+curl http://ada2:7860/healthz
 
 # Generate test image
-curl -X POST http://ada2.local:7860/api/v1/images/generations \
+curl -X POST http://ada2:7860/api/v1/images/generations \
   -H "Content-Type: application/json" \
   -d '{
     "model": "sd-xl-base-1.0",
@@ -338,8 +338,8 @@ Once ada2 is working:
 - Verify VRAM: Needs ~8GB for SDXL, ~4GB for SD 1.5
 
 ### Gateway returns 503 (backend not ready)
-- Check health endpoints: `curl http://ada2.local:7860/healthz`
-- Check InvokeAI API: `curl http://ada2.local:7860/api/v1/models`
+- Check health endpoints: `curl http://ada2:7860/healthz`
+- Check InvokeAI API: `curl http://ada2:7860/api/v1/models`
 - Wait 30s for gateway health check to update
 
 ### Images are base64 instead of URLs

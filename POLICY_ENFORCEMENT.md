@@ -28,7 +28,7 @@ Legacy backend names (`ollama`, `mlx`) are mapped to their backend classes for c
 - **Hardware**: RTX 6000 Ada (46GB VRAM)
 - **Software**: InvokeAI (recommended) or ComfyUI
 - **Models**: SDXL (1024x1024) or SD 1.5 (512x512)
-- **Endpoint**: `http://ada2.local:7860`
+- **Endpoint**: `http://ada2:7860`
 - **Health endpoints**: `/healthz` (liveness), `/readyz` (readiness)
 
 For setup instructions, see [IMAGE_BACKEND_SETUP.md](IMAGE_BACKEND_SETUP.md).
@@ -56,7 +56,7 @@ backends:
 
   gpu_heavy:
     class: gpu_heavy
-    base_url: http://ada2.local:7860
+    base_url: http://ada2:7860
     supported_capabilities:
       - images
     concurrency_limits:
@@ -74,7 +74,7 @@ IMAGES_BACKEND_CLASS=gpu_heavy
 
 # Images backend implementation (InvokeAI or ComfyUI on ada2)
 IMAGES_BACKEND=http_openai_images
-IMAGES_HTTP_BASE_URL=http://ada2.local:7860
+IMAGES_HTTP_BASE_URL=http://ada2:7860
 IMAGES_OPENAI_MODEL=sd-xl-base-1.0  # or sd-v1-5
 
 # Image storage directory (content-addressed)
