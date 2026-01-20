@@ -81,6 +81,17 @@ class Settings(BaseSettings):
     IMAGES_OPENAI_MODEL_FAST: str = "gpu_fast"
     IMAGES_OPENAI_MODEL_SLOW: str = "gpu_slow"
 
+    # HeartMula (music generation)
+    # HeartMula is a local HTTP service (see ai-infra/services/heartmula).
+    # The gateway uses this base URL when MUSIC_BACKEND=http_heartmula.
+    HEARTMULA_BASE_URL: str = ""
+    HEARTMULA_TIMEOUT_SEC: float = 120.0
+    HEARTMULA_GENERATE_PATH: str = "/v1/music/generations"
+
+    # Music generation routing/admission control.
+    # This ties into backends_config.yaml (capability: music).
+    MUSIC_BACKEND_CLASS: str = "heartmula_music"
+
     DEFAULT_BACKEND: Literal["ollama", "mlx"] = "ollama"
 
     # Backends can each have "strong" and "fast" model choices.

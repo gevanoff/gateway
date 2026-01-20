@@ -81,12 +81,24 @@ class HealthChecker:
     
     async def _check_backend(self, backend_class: str, config: BackendConfig):
         """Check a single backend's health and readiness."""
-        base_url = config.base_url.rstrip("/")
+        base_url = (config.base_url or "").rstrip("/")
         
         is_healthy = False
         is_ready = False
         error = None
         
+        # If base_url isn't configured (e.g. env-var placeholder not set), mark not-ready.
+        if not base_url or not (base_url.startswith("http://") or base_url.startswith("https://")):
+            status = HealthStatus(
+                backend_class=backend_class,
+                is_healthy=False,
+                is_ready=False,
+                last_check=time.time(),
+                error="base_url not configured",
+            )
+            self._status[backend_class] = status
+            return
+
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 # Check liveness

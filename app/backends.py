@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
+import os
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 
@@ -17,7 +18,7 @@ from fastapi import HTTPException
 from app.config import S, logger
 
 
-RouteKind = Literal["chat", "embeddings", "images"]
+RouteKind = Literal["chat", "embeddings", "images", "music"]
 
 
 @dataclass(frozen=True)
@@ -166,9 +167,14 @@ def load_backends_config(path: Optional[Path] = None) -> BackendRegistry:
     backends = {}
     for name, cfg in data.get("backends", {}).items():
         health = cfg.get("health", {})
+
+        # Allow env var substitution in YAML values (e.g. "${HEARTMULA_BASE_URL}").
+        raw_base_url = cfg.get("base_url", "")
+        base_url = os.path.expandvars(raw_base_url) if isinstance(raw_base_url, str) else ""
+
         backends[name] = BackendConfig(
             backend_class=cfg.get("class", name),
-            base_url=cfg.get("base_url", ""),
+            base_url=base_url,
             description=cfg.get("description", ""),
             supported_capabilities=cfg.get("supported_capabilities", []),
             concurrency_limits=cfg.get("concurrency_limits", {}),

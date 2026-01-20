@@ -70,6 +70,19 @@ backends:
       images_allow_base64: true
       images_max_bytes: 50000000
 
+  heartmula_music:
+    class: heartmula_music
+    base_url: ${HEARTMULA_BASE_URL}
+    description: HeartMula music generator (HTTP)
+    supported_capabilities:
+      - music
+    concurrency_limits:
+      music: 2
+    health:
+      liveness: /healthz
+      readiness: /readyz
+    payload_policy: {}
+
 # Legacy backend names map to backend classes
 legacy_mapping:
   mlx: local_mlx

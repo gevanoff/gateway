@@ -1,0 +1,95 @@
+from __future__ import annotations
+
+import time
+from typing import Any, Dict
+
+import httpx
+
+from app.backends import get_registry
+from app.config import S
+
+
+def _effective_heartmula_base_url(*, backend_class: str) -> str:
+    # Prefer configured backend registry (supports env var expansion via backends_config.yaml).
+    try:
+        reg = get_registry()
+        cfg = reg.get_backend(backend_class)
+        if cfg and isinstance(cfg.base_url, str) and cfg.base_url.strip():
+            return cfg.base_url.strip().rstrip("/")
+    except Exception:
+        pass
+
+    # Fallback to Settings.
+    return (getattr(S, "HEARTMULA_BASE_URL", "") or "").strip().rstrip("/")
+
+
+def _effective_timeout_sec() -> float:
+    try:
+        return float(getattr(S, "HEARTMULA_TIMEOUT_SEC", 120.0) or 120.0)
+    except Exception:
+        return 120.0
+
+
+def _effective_generate_path() -> str:
+    p = (getattr(S, "HEARTMULA_GENERATE_PATH", "") or "/v1/music/generations").strip()
+    if not p.startswith("/"):
+        p = "/" + p
+    return p
+
+
+async def generate_music(*, backend_class: str, body: Dict[str, Any]) -> Dict[str, Any]:
+    """Proxy a music generation request to HeartMula.
+
+    This is intentionally a mostly-transparent proxy because HeartMula's API
+    surface may evolve. The gateway adds a stable `_gateway` envelope for
+    debugging/telemetry.
+    """
+
+    base = _effective_heartmula_base_url(backend_class=backend_class)
+    if not base:
+        raise RuntimeError("HEARTMULA_BASE_URL is required (or set base_url for heartmula_music in backends_config.yaml)")
+
+    timeout = _effective_timeout_sec()
+    path = _effective_generate_path()
+
+    # Best-effort: allow callers to send "input" instead of "prompt".
+    if "prompt" not in body and isinstance(body.get("input"), str):
+        body = dict(body)
+        body["prompt"] = body.get("input")
+
+    started = time.time()
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        r = await client.post(f"{base}{path}", json=body)
+
+    # Raise on non-2xx, but keep detail readable.
+    if r.status_code < 200 or r.status_code >= 300:
+        detail: Any
+        try:
+            detail = r.json()
+        except Exception:
+            detail = r.text
+        raise RuntimeError(f"heartmula HTTP {r.status_code}: {detail}")
+
+    try:
+        out = r.json()
+    except Exception:
+        # If HeartMula returns non-JSON, wrap it.
+        out = {"raw": r.text}
+
+    # Ensure stable envelope for UI/debugging.
+    if isinstance(out, dict):
+        gw = out.get("_gateway")
+        if not isinstance(gw, dict):
+            gw = {}
+        gw.update(
+            {
+                "backend": "heartmula",
+                "backend_class": backend_class,
+                "upstream_base_url": base,
+                "upstream_path": path,
+                "upstream_latency_ms": round((time.time() - started) * 1000.0, 1),
+            }
+        )
+        out["_gateway"] = gw
+
+    return out
