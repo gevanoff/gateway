@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import time
+import re
 from typing import Any, Dict, List, Literal, Tuple
 
 import httpx
@@ -62,6 +63,44 @@ def _parse_size(size: str) -> Tuple[int, int]:
 
 def _b64(b: bytes) -> str:
     return base64.b64encode(b).decode("ascii")
+
+
+_PHOTO_REAL_RE = re.compile(
+    r"\b(photoreal|photo-real|realistic|dslr|cinematic|35mm|bokeh|portrait photo|product photo|studio lighting|skin texture)\b",
+    re.IGNORECASE,
+)
+
+
+def _select_images_model(*, prompt: str, requested_model: str | None) -> Tuple[str, str]:
+    """Return (chosen_model, reason).
+
+    Never returns the sentinel model name "auto".
+    """
+
+    rm = (requested_model or "").strip()
+    cfg_model = (getattr(S, "IMAGES_OPENAI_MODEL", "") or "").strip()
+    enable_rt = bool(getattr(S, "IMAGES_ENABLE_REQUEST_TYPE", False))
+
+    # Explicit model always wins unless it's the sentinel "auto".
+    if rm and rm.lower() != "auto":
+        return rm, "request:model"
+
+    # Configured model wins unless it's "auto".
+    if cfg_model and cfg_model.lower() != "auto":
+        return cfg_model, "config:model"
+
+    # If request-type routing isn't enabled, omit model rather than forwarding "auto".
+    if not enable_rt:
+        return "", "omit:model"
+
+    # Request-type: photoreal vs fast. Defaults are shim preset ids.
+    fast = (getattr(S, "IMAGES_OPENAI_MODEL_FAST", "gpu_fast") or "gpu_fast").strip()
+    slow = (getattr(S, "IMAGES_OPENAI_MODEL_SLOW", "gpu_slow") or "gpu_slow").strip()
+
+    p = (prompt or "").strip()
+    if _PHOTO_REAL_RE.search(p):
+        return slow, "policy:images->slow"
+    return fast, "policy:images->fast"
 
 
 def _mock_svg(prompt: str, width: int, height: int) -> bytes:
@@ -262,7 +301,7 @@ async def generate_images(
             raise RuntimeError("IMAGES_HTTP_BASE_URL is required for http_openai_images")
 
         timeout = float(getattr(S, "IMAGES_HTTP_TIMEOUT_SEC", 120.0) or 120.0)
-        chosen_model = (model or "").strip() or (getattr(S, "IMAGES_OPENAI_MODEL", "") or "").strip()
+        chosen_model, model_reason = _select_images_model(prompt=prompt, requested_model=model)
 
         payload: Dict[str, Any] = {
             "prompt": prompt,
@@ -324,7 +363,7 @@ async def generate_images(
         resp2: Dict[str, Any] = {"created": int(out.get("created") or time.time()), "data": normalized}
         resp2["_gateway"] = {"backend": backend, "mime": "image/png"}
         if chosen_model:
-            resp2["_gateway"].update({"model": chosen_model})
+            resp2["_gateway"].update({"model": chosen_model, "model_reason": model_reason})
         if guidance_used is not None:
             resp2["_gateway"].update({"guidance_scale": guidance_used, "guidance_auto": guidance_auto})
 

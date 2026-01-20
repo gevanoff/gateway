@@ -67,6 +67,12 @@ class Settings(BaseSettings):
     # Note: Some OpenAI-ish image servers require a model, but others (like the
     # InvokeAI OpenAI-images shim) can use their own configured default if omitted.
 
+    # Request-type routing for images (opt-in): when enabled, model="auto" (or
+    # IMAGES_OPENAI_MODEL="auto") selects between FAST/SLOW based on prompt heuristics.
+    IMAGES_ENABLE_REQUEST_TYPE: bool = False
+    IMAGES_OPENAI_MODEL_FAST: str = "gpu_fast"
+    IMAGES_OPENAI_MODEL_SLOW: str = "gpu_slow"
+
     DEFAULT_BACKEND: Literal["ollama", "mlx"] = "ollama"
 
     # Backends can each have "strong" and "fast" model choices.
@@ -84,6 +90,11 @@ class Settings(BaseSettings):
     # If true, enable heuristic routing (tools/long-context/fast tier selection).
     # If false (default), routing is strictly alias/prefix/explicit-model driven.
     ROUTER_ENABLE_POLICY: bool = False
+
+    # Request-type routing for chat/completions (opt-in): when enabled alongside
+    # ROUTER_ENABLE_POLICY, the router may detect coding requests and prefer the
+    # "coder" alias.
+    ROUTER_ENABLE_REQUEST_TYPE: bool = False
 
     # Model alias registry (JSON via env, or JSON file on disk)
     # Example env:

@@ -121,6 +121,7 @@ async def list_models(req: Request):
         except Exception:
             pass
 
+    data["data"].append({"id": "auto", "object": "model", "created": now, "owned_by": "gateway"})
     data["data"].append({"id": "ollama", "object": "model", "created": now, "owned_by": "gateway"})
     data["data"].append({"id": "mlx", "object": "model", "created": now, "owned_by": "gateway"})
 
@@ -174,6 +175,7 @@ async def chat_completions(req: Request):
         messages=[m.model_dump(exclude_none=True) for m in cc.messages],
         has_tools=bool(cc.tools),
         enable_policy=S.ROUTER_ENABLE_POLICY,
+        enable_request_type=getattr(S, "ROUTER_ENABLE_REQUEST_TYPE", False),
     )
     backend: Literal["ollama", "mlx"] = route.backend
     model_name = route.model
@@ -314,6 +316,7 @@ async def completions(req: Request):
     if cc.stream:
         stream_id = new_id("cmpl")
         created = now_unix()
+        enable_request_type=getattr(S, "ROUTER_ENABLE_REQUEST_TYPE", False),
 
         async def gen() -> AsyncIterator[bytes]:
             if backend == "mlx":

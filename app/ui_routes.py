@@ -339,6 +339,7 @@ async def ui_chat(req: Request) -> Dict[str, Any]:
         messages=[m.model_dump(exclude_none=True) for m in cc.messages],
         has_tools=False,
         enable_policy=S.ROUTER_ENABLE_POLICY,
+        enable_request_type=getattr(S, "ROUTER_ENABLE_REQUEST_TYPE", False),
     )
 
     backend: Literal["ollama", "mlx"] = route.backend

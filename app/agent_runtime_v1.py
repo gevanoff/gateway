@@ -322,6 +322,7 @@ async def run_agent_v1(*, req: Request, run_req: AgentRunRequest) -> Tuple[Dict[
         messages=[m.model_dump(exclude_none=True) for m in messages],
         has_tools=bool(tools),
         enable_policy=getattr(S, "ROUTER_ENABLE_POLICY", True),
+        enable_request_type=getattr(S, "ROUTER_ENABLE_REQUEST_TYPE", False),
     )
     backend: Backend = route.backend
     upstream_model = route.model
