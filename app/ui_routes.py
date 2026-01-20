@@ -243,6 +243,13 @@ async def ui2(req: Request) -> HTMLResponse:
     return HTMLResponse(html_path.read_text(encoding="utf-8"))
 
 
+@router.get("/ui/image", include_in_schema=False)
+async def ui_image_frontend(req: Request) -> HTMLResponse:
+    _require_ui_access(req)
+    html_path = Path(__file__).with_name("static").joinpath("image.html")
+    return HTMLResponse(html_path.read_text(encoding="utf-8"))
+
+
 @router.post("/ui/api/conversations/new", include_in_schema=False)
 async def ui_conversation_new(req: Request) -> Dict[str, Any]:
     _require_ui_access(req)

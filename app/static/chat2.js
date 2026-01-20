@@ -45,6 +45,31 @@
       .replaceAll("'", "&#039;");
   }
 
+  function buildImageUiUrl({ prompt, image_request }) {
+    const qs = new URLSearchParams();
+    const p = typeof prompt === "string" ? prompt.trim() : "";
+    if (p) qs.set("prompt", p);
+
+    const req = image_request && typeof image_request === "object" ? image_request : {};
+    const add = (k, v) => {
+      if (v === undefined || v === null) return;
+      const s = String(v).trim();
+      if (!s) return;
+      qs.set(k, s);
+    };
+
+    add("size", req.size);
+    add("n", req.n);
+    add("model", req.model);
+    add("seed", req.seed);
+    add("steps", req.steps);
+    add("guidance_scale", req.guidance_scale);
+    add("negative_prompt", req.negative_prompt);
+
+    const q = qs.toString();
+    return q ? `/ui/image?${q}` : "/ui/image";
+  }
+
   function scrollToBottom() {
     chatEl.scrollTop = chatEl.scrollHeight;
   }
@@ -84,10 +109,13 @@
       if (m.backend) metaBits.push(`backend=${m.backend}`);
       if (m.model) metaBits.push(`model=${m.model}`);
       if (m.sha256) metaBits.push(`sha=${String(m.sha256).slice(0, 12)}`);
+
+      const link = buildImageUiUrl({ prompt: m.prompt, image_request: m.image_request });
+
       addMessage({
         role: role === "user" ? "user" : "assistant",
         meta: metaBits.length ? `Image • ${metaBits.join(" • ")}` : "Image",
-        html: `<img class="gen" src="${escapeHtml(m.url.trim())}" alt="generated" />`,
+        html: `<img class="gen" src="${escapeHtml(m.url.trim())}" alt="generated" />\n<div style="margin-top:8px"><a href="${escapeHtml(link)}">Open in Image UI</a></div>`,
       });
       return;
     }
@@ -265,10 +293,11 @@
   }
 
   async function generateImageFromPrompt(prompt) {
+    const imageRequest = { prompt, size: "1024x1024", n: 1 };
     const resp = await fetch("/ui/api/image", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt, size: "1024x1024", n: 1 }),
+      body: JSON.stringify(imageRequest),
     });
 
     const text = await resp.text();
@@ -311,16 +340,20 @@
       role: "assistant",
       type: "image",
       url: src,
+      prompt: prompt,
+      image_request: imageRequest,
       backend: payload?._gateway?.backend,
       model: payload?._gateway?.model,
       sha256: payload?._gateway?.ui_image_sha256,
       mime: payload?._gateway?.ui_image_mime,
     });
 
+    const link = buildImageUiUrl({ prompt, image_request: imageRequest });
+
     addMessage({
       role: "assistant",
       meta: metaBits.length ? `Image • ${metaBits.join(" • ")}` : "Image",
-      html: `<img class="gen" src="${escapeHtml(src)}" alt="generated" />`,
+      html: `<img class="gen" src="${escapeHtml(src)}" alt="generated" />\n<div style="margin-top:8px"><a href="${escapeHtml(link)}">Open in Image UI</a></div>`,
     });
   }
 
