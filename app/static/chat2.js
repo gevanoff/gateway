@@ -13,7 +13,28 @@
   let history = [];
 
   const CONVO_KEY = "gw_ui2_conversation_id";
+  const AUTO_IMAGE_KEY = "gw_ui2_auto_image";
   let conversationId = "";
+
+  function loadAutoImageSetting() {
+    if (!autoImageEl) return;
+    const raw = (localStorage.getItem(AUTO_IMAGE_KEY) || "").trim().toLowerCase();
+    if (raw === "1" || raw === "true" || raw === "yes" || raw === "on") {
+      autoImageEl.checked = true;
+      return;
+    }
+    if (raw === "0" || raw === "false" || raw === "no" || raw === "off") {
+      autoImageEl.checked = false;
+      return;
+    }
+    // Default: off (avoid accidental image generation).
+    autoImageEl.checked = false;
+  }
+
+  function saveAutoImageSetting() {
+    if (!autoImageEl) return;
+    localStorage.setItem(AUTO_IMAGE_KEY, autoImageEl.checked ? "1" : "0");
+  }
 
   function escapeHtml(s) {
     return String(s)
@@ -211,8 +232,20 @@
     if (!s) return false;
     if (s.startsWith("/image ") || s.startsWith("/img ") || s.startsWith("image:")) return true;
 
-    // Very small heuristic: treat explicit "generate an image" / "create an image" as image requests.
-    if (s.startsWith("generate an image") || s.startsWith("create an image") || s.startsWith("make an image")) {
+    // Heuristic (opt-in via checkbox): require explicit visual intent.
+    // Keep conservative to avoid false positives like "draw conclusions".
+    const hasImageWord = /\b(image|picture|photo|photograph|art|artwork|illustration|drawing|sketch|render|logo|icon|avatar|wallpaper|poster|banner)\b/.test(s);
+    const hasMakeVerb = /\b(generate|create|make|draw|paint|illustrate|render|design)\b/.test(s);
+    if (hasImageWord && hasMakeVerb) return true;
+
+    // Common explicit patterns.
+    if (/^(generate|create|make) (me )?(an |a )?(image|picture|photo|illustration|drawing|sketch|logo|icon|avatar|wallpaper|poster|banner)\b/.test(s)) {
+      return true;
+    }
+    if (/^draw (me |us )?(an |a )?\b/.test(s)) {
+      return true;
+    }
+    if (/^illustrate\b/.test(s)) {
       return true;
     }
     return false;
@@ -431,6 +464,9 @@
 
   loadModelsEl.addEventListener("click", () => void loadModels());
   sendEl.addEventListener("click", () => void send());
+  if (autoImageEl) {
+    autoImageEl.addEventListener("change", () => saveAutoImageSetting());
+  }
   clearEl.addEventListener("click", () => {
     history = [];
     chatEl.innerHTML = "";
@@ -449,6 +485,7 @@
   // Load models on startup.
   (async () => {
     try {
+      loadAutoImageSetting();
       await loadModels();
       await ensureConversation();
       await loadConversation();

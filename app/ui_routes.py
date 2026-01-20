@@ -219,6 +219,18 @@ def _save_ui_image(*, b64: str, mime_hint: str) -> tuple[str, str, str]:
 
 @router.get("/ui", include_in_schema=False)
 async def ui(req: Request) -> HTMLResponse:
+    """Main UI entrypoint.
+
+    We keep the legacy UI available at /ui1.
+    """
+
+    _require_ui_access(req)
+    html_path = Path(__file__).with_name("static").joinpath("chat2.html")
+    return HTMLResponse(html_path.read_text(encoding="utf-8"))
+
+
+@router.get("/ui1", include_in_schema=False)
+async def ui1(req: Request) -> HTMLResponse:
     _require_ui_access(req)
     html_path = Path(__file__).with_name("static").joinpath("chat.html")
     return HTMLResponse(html_path.read_text(encoding="utf-8"))
