@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import ipaddress
+import json
 import os
 import re
 import secrets
@@ -14,15 +15,17 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 from fastapi.responses import HTMLResponse
+from fastapi.responses import StreamingResponse
 
 from app.config import S
 from app.model_aliases import get_aliases
 from app.models import ChatCompletionRequest, ChatMessage
-from app.openai_utils import now_unix
+from app.openai_utils import now_unix, sse, sse_done
 from app.router import decide_route
 from app.router_cfg import router_cfg
-from app.upstreams import call_mlx_openai, call_ollama
+from app.upstreams import call_mlx_openai, call_ollama, stream_mlx_openai_chat, stream_ollama_chat_as_openai
 from app.images_backend import generate_images
+from app import ui_conversations
 
 
 router = APIRouter()
@@ -221,6 +224,49 @@ async def ui(req: Request) -> HTMLResponse:
     return HTMLResponse(html_path.read_text(encoding="utf-8"))
 
 
+@router.get("/ui2", include_in_schema=False)
+async def ui2(req: Request) -> HTMLResponse:
+    _require_ui_access(req)
+    html_path = Path(__file__).with_name("static").joinpath("chat2.html")
+    return HTMLResponse(html_path.read_text(encoding="utf-8"))
+
+
+@router.post("/ui/api/conversations/new", include_in_schema=False)
+async def ui_conversation_new(req: Request) -> Dict[str, Any]:
+    _require_ui_access(req)
+    convo = ui_conversations.create()
+    return {"conversation_id": convo.id}
+
+
+@router.get("/ui/api/conversations/{conversation_id}", include_in_schema=False)
+async def ui_conversation_get(req: Request, conversation_id: str) -> Dict[str, Any]:
+    _require_ui_access(req)
+    convo = ui_conversations.load(conversation_id)
+    if convo is None:
+        raise HTTPException(status_code=404, detail="not found")
+    return convo.to_dict()
+
+
+@router.post("/ui/api/conversations/{conversation_id}/append", include_in_schema=False)
+async def ui_conversation_append(req: Request, conversation_id: str) -> Dict[str, Any]:
+    _require_ui_access(req)
+    body = await req.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="body must be an object")
+    msg = body.get("message")
+    if not isinstance(msg, dict):
+        raise HTTPException(status_code=400, detail="message must be an object")
+    try:
+        convo = ui_conversations.append_message(conversation_id, msg)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="not found")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"failed to append: {type(e).__name__}: {e}")
+    return {"ok": True, "updated": convo.updated}
+
+
 @router.get("/ui/images/{name}", include_in_schema=False)
 async def ui_image_file(req: Request, name: str):
     _require_ui_access(req)
@@ -363,6 +409,285 @@ async def ui_chat(req: Request) -> Dict[str, Any]:
         if isinstance(resp.get("_gateway"), dict):
             resp["_gateway"].update({"backend": backend, "model": upstream_model, "reason": route.reason})
     return resp
+
+
+def _coerce_messages(body: dict[str, Any]) -> list[ChatMessage]:
+    raw = body.get("messages")
+    if isinstance(raw, list) and raw:
+        out: list[ChatMessage] = []
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            role = str(item.get("role") or "").strip() or "user"
+            content = item.get("content")
+            if not isinstance(content, str):
+                content = ""
+            out.append(ChatMessage(role=role, content=content))
+        if out:
+            return out
+
+    # Back-compat: single message.
+    message = body.get("message")
+    if isinstance(message, str) and message.strip():
+        return [ChatMessage(role="user", content=message.strip())]
+    return []
+
+
+def _conversation_to_chat_messages(convo: ui_conversations.Conversation) -> list[ChatMessage]:
+    msgs: list[ChatMessage] = []
+    if convo.summary:
+        msgs.append(ChatMessage(role="system", content=f"Conversation summary:\n{convo.summary.strip()}"))
+
+    for item in convo.messages:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role") or "").strip() or "user"
+        # Skip non-text assistant artifacts from the prompt context.
+        if str(item.get("type") or "") == "image":
+            continue
+        content = item.get("content")
+        if not isinstance(content, str):
+            continue
+        msgs.append(ChatMessage(role=role, content=content))
+
+    return msgs
+
+
+def _summary_trigger_bytes() -> int:
+    try:
+        return int(getattr(S, "UI_CHAT_SUMMARY_TRIGGER_BYTES", 0) or 0)
+    except Exception:
+        return 0
+
+
+def _summary_keep_last_messages() -> int:
+    try:
+        return int(getattr(S, "UI_CHAT_SUMMARY_KEEP_LAST_MESSAGES", 12) or 12)
+    except Exception:
+        return 12
+
+
+async def _summarize_if_needed(convo: ui_conversations.Conversation) -> ui_conversations.Conversation:
+    trigger = _summary_trigger_bytes()
+    if trigger <= 0:
+        return convo
+
+    # Estimate size based on current stored JSON-ish payload.
+    try:
+        approx = len(json.dumps(convo.to_dict(), ensure_ascii=False).encode("utf-8"))
+    except Exception:
+        approx = 0
+    if approx <= trigger:
+        return convo
+
+    keep_n = max(4, _summary_keep_last_messages())
+    tail = convo.messages[-keep_n:]
+    head = convo.messages[:-keep_n]
+    if not head:
+        return convo
+
+    head_text_parts: list[str] = []
+    for m in head:
+        if not isinstance(m, dict):
+            continue
+        if str(m.get("type") or "") == "image":
+            continue
+        role = str(m.get("role") or "").strip() or "user"
+        content = m.get("content")
+        if not isinstance(content, str) or not content.strip():
+            continue
+        head_text_parts.append(f"{role}: {content.strip()}")
+
+    if not head_text_parts:
+        convo.messages = tail
+        convo.updated = int(time.time())
+        ui_conversations.save(convo)
+        return convo
+
+    summarizer_model = "long"  # prefer long-context alias if present
+    summary_prompt = (
+        "Summarize the conversation so far for future context. "
+        "Preserve user preferences, goals, key facts, constraints, decisions, and open questions. "
+        "Do not include private reasoning or chain-of-thought. Output concise bullet points.\n\n"
+        + "\n".join(head_text_parts)
+    )
+
+    cc_sum = ChatCompletionRequest(
+        model=summarizer_model,
+        messages=[ChatMessage(role="user", content=summary_prompt)],
+        stream=False,
+    )
+
+    route = decide_route(
+        cfg=router_cfg(),
+        request_model=cc_sum.model,
+        headers={},
+        messages=[m.model_dump(exclude_none=True) for m in cc_sum.messages],
+        has_tools=False,
+        enable_policy=S.ROUTER_ENABLE_POLICY,
+        enable_request_type=getattr(S, "ROUTER_ENABLE_REQUEST_TYPE", False),
+    )
+
+    backend: Literal["ollama", "mlx"] = route.backend
+    upstream_model = route.model
+    cc_sum_routed = ChatCompletionRequest(
+        model=upstream_model if backend == "mlx" else cc_sum.model,
+        messages=cc_sum.messages,
+        stream=False,
+    )
+    resp = await (call_mlx_openai(cc_sum_routed) if backend == "mlx" else call_ollama(cc_sum, upstream_model))
+    text = (((resp.get("choices") or [{}])[0].get("message") or {}).get("content") or "")
+    if not isinstance(text, str):
+        text = ""
+
+    prior = (convo.summary or "").strip()
+    merged = (prior + "\n" + text.strip()).strip() if prior and text.strip() else (text.strip() or prior)
+    convo.summary = merged
+    convo.messages = tail
+    convo.updated = int(time.time())
+    ui_conversations.save(convo)
+    return convo
+
+
+@router.post("/ui/api/chat_stream", include_in_schema=False)
+async def ui_chat_stream(req: Request):
+    """Tokenless SSE stream for the browser UI.
+
+    Emits gateway status events (routing/backend/model) and then streamed text deltas.
+    This intentionally does NOT expose model chain-of-thought; it only streams the
+    assistant text and gateway metadata.
+    """
+
+    _require_ui_access(req)
+    body = await req.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="body must be an object")
+
+    model = (body.get("model") or "fast").strip()
+    conversation_id = str(body.get("conversation_id") or "").strip()
+    message_text = body.get("message")
+
+    # Prefer server-side conversation history if a conversation_id is provided.
+    if conversation_id:
+        convo = ui_conversations.load(conversation_id)
+        if convo is None:
+            raise HTTPException(status_code=404, detail="conversation not found")
+
+        if isinstance(message_text, str) and message_text.strip():
+            try:
+                ui_conversations.append_message(conversation_id, {"role": "user", "content": message_text.strip()})
+                convo = ui_conversations.load(conversation_id) or convo
+            except Exception:
+                pass
+
+        # Best-effort summarization/pruning.
+        try:
+            convo = await _summarize_if_needed(convo)
+        except Exception:
+            pass
+
+        messages = _conversation_to_chat_messages(convo)
+    else:
+        messages = _coerce_messages(body)
+
+    if not messages:
+        raise HTTPException(status_code=400, detail="messages required")
+
+    cc = ChatCompletionRequest(
+        model=model,
+        messages=messages,
+        stream=True,
+    )
+
+    route = decide_route(
+        cfg=router_cfg(),
+        request_model=cc.model,
+        headers={k.lower(): v for k, v in req.headers.items()},
+        messages=[m.model_dump(exclude_none=True) for m in cc.messages],
+        has_tools=False,
+        enable_policy=S.ROUTER_ENABLE_POLICY,
+        enable_request_type=getattr(S, "ROUTER_ENABLE_REQUEST_TYPE", False),
+    )
+
+    backend: Literal["ollama", "mlx"] = route.backend
+    upstream_model = route.model
+
+    cc_routed = ChatCompletionRequest(
+        model=upstream_model if backend == "mlx" else cc.model,
+        messages=cc.messages,
+        tools=None,
+        tool_choice=None,
+        temperature=cc.temperature,
+        max_tokens=cc.max_tokens,
+        stream=True,
+    )
+
+    if backend == "mlx":
+        payload = cc_routed.model_dump(exclude_none=True)
+        payload["model"] = upstream_model
+        payload["stream"] = True
+        upstream_gen = stream_mlx_openai_chat(payload)
+    else:
+        upstream_gen = stream_ollama_chat_as_openai(cc_routed, upstream_model)
+
+    async def gen():
+        yield sse({"type": "route", "backend": backend, "model": upstream_model, "reason": route.reason})
+
+        full_text = ""
+
+        async for chunk in upstream_gen:
+            for line in chunk.splitlines():
+                if not line.startswith(b"data:"):
+                    continue
+                data = line[len(b"data:") :].strip()
+                if data == b"[DONE]":
+                    yield sse({"type": "done"})
+                    yield sse_done()
+                    return
+
+                try:
+                    j = json.loads(data)
+                except Exception:
+                    continue
+
+                if isinstance(j, dict) and isinstance(j.get("error"), dict):
+                    yield sse({"type": "error", "error": j.get("error")})
+                    continue
+
+                try:
+                    delta = (((j or {}).get("choices") or [{}])[0].get("delta") or {})
+                    text = delta.get("content")
+                except Exception:
+                    text = None
+
+                if isinstance(text, str) and text:
+                    full_text += text
+                    yield sse({"type": "delta", "delta": text})
+
+        # Persist assistant message if we have a server-side conversation.
+        if conversation_id:
+            try:
+                ui_conversations.append_message(
+                    conversation_id,
+                    {
+                        "role": "assistant",
+                        "content": full_text,
+                        "backend": backend,
+                        "model": upstream_model,
+                        "reason": route.reason,
+                    },
+                )
+            except Exception:
+                pass
+
+        yield sse({"type": "done"})
+        yield sse_done()
+
+    out = StreamingResponse(gen(), media_type="text/event-stream")
+    out.headers["X-Backend-Used"] = backend
+    out.headers["X-Model-Used"] = upstream_model
+    out.headers["X-Router-Reason"] = route.reason
+    return out
 
 
 @router.post("/ui/api/image", include_in_schema=False)

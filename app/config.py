@@ -52,6 +52,14 @@ class Settings(BaseSettings):
     UI_IMAGE_TTL_SEC: int = 900
     UI_IMAGE_MAX_BYTES: int = 50_000_000
 
+    # Tokenless UI chat persistence
+    # Stored on disk and served only to allowlisted UI clients (still gated by UI_IP_ALLOWLIST).
+    UI_CHAT_DIR: str = "/var/lib/gateway/data/ui_chats"
+    UI_CHAT_TTL_SEC: int = 60 * 60 * 24 * 7  # 7 days
+    UI_CHAT_MAX_BYTES: int = 2_000_000  # hard cap per conversation file
+    UI_CHAT_SUMMARY_TRIGGER_BYTES: int = 250_000  # summarize when history grows beyond this
+    UI_CHAT_SUMMARY_KEEP_LAST_MESSAGES: int = 12  # keep tail messages after summarizing
+
     # Images (text-to-image)
     # Default backend is "mock" which returns an SVG placeholder.
     # Set IMAGES_BACKEND=http_a1111 and IMAGES_HTTP_BASE_URL=http://127.0.0.1:7860 to use Automatic1111's API.
