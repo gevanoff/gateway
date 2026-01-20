@@ -130,6 +130,7 @@ def _now_iso() -> str:
 def _deployed_commit_stamps(app_dir: str) -> dict[str, Optional[str]]:
     return {
         "gateway_commit": _read_text(os.path.join(app_dir, "DEPLOYED_GATEWAY_COMMIT")),
+        "gateway_ref": _read_text(os.path.join(app_dir, "DEPLOYED_GATEWAY_GIT_REF")),
         "ai_infra_commit": _read_text(os.path.join(app_dir, "DEPLOYED_AI_INFRA_COMMIT")),
     }
 
@@ -246,6 +247,7 @@ def main(argv: list[str]) -> int:
         },
         "source": {
             "gateway_commit": stamps.get("gateway_commit") or "unknown",
+            "gateway_ref": stamps.get("gateway_ref") or None,
             "ai_infra_commit": stamps.get("ai_infra_commit") or "unknown",
         },
         "gateway": {
