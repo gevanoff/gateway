@@ -365,6 +365,10 @@
 
     // Create assistant bubble immediately, then stream into it.
     const assistant = addMessage({ role: "assistant", content: "", meta: "Assistant" });
+    const thinkingEl = document.createElement("div");
+    thinkingEl.className = "thinking";
+    thinkingEl.style.display = "none";
+    assistant.wrap.insertBefore(thinkingEl, assistant.contentEl);
 
     setBusy(true);
 
@@ -378,6 +382,10 @@
       const backend = resp.headers.get("x-backend-used") || "";
       const usedModel = resp.headers.get("x-model-used") || "";
       const reason = resp.headers.get("x-router-reason") || "";
+      let hasContent = false;
+      let thinkingShown = false;
+      let thinkingBuffer = "";
+      let isOllama = backend === "ollama";
 
       if (!resp.ok) {
         const text = await resp.text();
@@ -385,6 +393,23 @@
         assistant.metaEl.textContent = `HTTP ${resp.status}`;
         return;
       }
+
+      const setThinking = (text) => {
+        if (!text) {
+          thinkingEl.textContent = "";
+          thinkingEl.style.display = "none";
+          return;
+        }
+        thinkingEl.textContent = text;
+        thinkingEl.style.display = "block";
+        scrollToBottom();
+      };
+
+      const showThinking = () => {
+        if (hasContent || thinkingShown || !isOllama) return;
+        setThinking("Ollama is thinking…");
+        thinkingShown = true;
+      };
 
       // Stream SSE from fetch().body.
       const reader = resp.body.getReader();
@@ -402,6 +427,7 @@
       }
 
       updateMeta("streaming");
+      showThinking();
 
       while (true) {
         const { value, done } = await reader.read();
@@ -441,10 +467,25 @@
               if (evt.model) bits.push(`model=${evt.model}`);
               if (evt.reason) bits.push(`reason=${evt.reason}`);
               assistant.metaEl.textContent = bits.join(" • ") || assistant.metaEl.textContent;
+              if (evt.backend) {
+                isOllama = evt.backend === "ollama";
+                showThinking();
+              }
+              continue;
+            }
+
+            if (evt.type === "thinking" && typeof evt.thinking === "string") {
+              thinkingBuffer += evt.thinking;
+              setThinking(`Thinking: ${thinkingBuffer}`);
+              thinkingShown = true;
               continue;
             }
 
             if (evt.type === "delta" && typeof evt.delta === "string") {
+              if (!hasContent) {
+                hasContent = true;
+                if (thinkingShown) setThinking("");
+              }
               full += evt.delta;
               assistant.contentEl.textContent = full;
               scrollToBottom();
@@ -458,6 +499,9 @@
             }
 
             if (evt.type === "done") {
+              if (!hasContent && thinkingShown) {
+                setThinking("");
+              }
               updateMeta("done");
               continue;
             }

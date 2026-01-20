@@ -16,13 +16,14 @@
       select, input, textarea { box-sizing: border-box; padding: 10px; border-radius: 10px; border: 1px solid rgba(231,237,246,0.12); background: #12161c; color: #e7edf6; }
       button { padding: 10px 12px; border-radius: 10px; border: 1px solid rgba(231,237,246,0.14); background: #12161c; color: #e7edf6; cursor: pointer; }
       button:disabled { opacity: 0.6; cursor: default; }
-      .chat { border: 1px solid rgba(231,237,246,0.12); background: #0e1217; border-radius: 12px; padding: 12px; min-height: 340px; }
+      .chat { border: 1px solid rgba(231,237,246,0.12); background: #0e1217; border-radius: 12px; padding: 12px; min-height: 340px; max-height: 60vh; overflow-y: auto; }
       .msg { display:flex; flex-direction:column; gap:6px; padding: 10px; border-radius: 12px; margin: 10px 0; border: 1px solid rgba(231,237,246,0.10); }
       .msg.user { background: rgba(50, 110, 255, 0.10); }
       .msg.assistant { background: rgba(231,237,246,0.06); }
       .msg.system { background: rgba(255, 200, 50, 0.08); }
       .meta { font-size: 12px; color: #a9b4c3; }
       .content { white-space: pre-wrap; line-height: 1.5; }
+      .thinking { font-size: 12px; color: #93a4ba; font-style: italic; }
       .composer { margin-top: 12px; display:flex; gap:10px; }
       .composer textarea { flex: 1; min-height: 64px; resize: vertical; }
       .right { display:flex; flex-direction:column; gap:10px; }

@@ -103,19 +103,37 @@ async def ollama_ndjson_to_openai_sse(
                 yield sse_done()
                 return
 
-        # Ollama /api/chat uses "message": {"role":"assistant","content":"..."} and "done"
-        # /api/generate uses "response": "..." and "done" :contentReference[oaicite:3]{index=3}
+            # Ollama /api/chat uses "message": {"role":"assistant","content":"..."} and "done"
+            # /api/generate uses "response": "..." and "done"
             done = bool(obj.get("done", False))
 
-        # Prefer chat field
+            # Prefer chat field
             content = None
             msg = obj.get("message")
             if isinstance(msg, dict):
                 content = msg.get("content")
+                thinking = msg.get("thinking") or msg.get("reasoning") or msg.get("thoughts")
+            else:
+                thinking = None
 
-        # Fallback to generate field
+            # Fallback to generate field
             if content is None:
                 content = obj.get("response")
+
+            if isinstance(thinking, str) and thinking:
+                delta: Dict[str, Any] = {"thinking": thinking}
+                if not sent_role:
+                    delta["role"] = "assistant"
+                    sent_role = True
+                yield sse(
+                    {
+                        "id": chunk_id,
+                        "object": "chat.completion.chunk",
+                        "created": created,
+                        "model": model_name,
+                        "choices": [{"index": 0, "delta": delta, "finish_reason": None}],
+                    }
+                )
 
             if content:
                 content_emitted = True

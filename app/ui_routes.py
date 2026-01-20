@@ -572,9 +572,9 @@ async def _summarize_if_needed(convo: ui_conversations.Conversation) -> ui_conve
 async def ui_chat_stream(req: Request):
     """Tokenless SSE stream for the browser UI.
 
-    Emits gateway status events (routing/backend/model) and then streamed text deltas.
-    This intentionally does NOT expose model chain-of-thought; it only streams the
-    assistant text and gateway metadata.
+    Emits gateway status events (routing/backend/model), optional thinking snippets,
+    and then streamed text deltas. This intentionally does NOT expose hidden
+    chain-of-thought; it only streams assistant-visible text and gateway metadata.
     """
 
     _require_ui_access(req)
@@ -676,8 +676,13 @@ async def ui_chat_stream(req: Request):
                 try:
                     delta = (((j or {}).get("choices") or [{}])[0].get("delta") or {})
                     text = delta.get("content")
+                    thinking = delta.get("thinking")
                 except Exception:
                     text = None
+                    thinking = None
+
+                if isinstance(thinking, str) and thinking:
+                    yield sse({"type": "thinking", "thinking": thinking})
 
                 if isinstance(text, str) and text:
                     full_text += text
