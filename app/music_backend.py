@@ -90,11 +90,23 @@ async def generate_music(*, backend_class: str, body: Dict[str, Any]) -> Dict[st
 
     # Ensure stable envelope for UI/debugging.
     if isinstance(out, dict):
-        # If HeartMula returned a local audio path like "/audio/<id>.wav", turn it into an absolute URL
-        # so the browser can fetch it from the HeartMula server (or a proxied address).
+        # If HeartMula returned a local audio path like "/audio/<id>.wav", convert it to a gateway-proxied URL
+        # so the browser fetches audio through the gateway rather than directly from HeartMula.
         audio_url = out.get("audio_url")
         if isinstance(audio_url, str) and audio_url.startswith("/"):
-            out["audio_url"] = f"{base}{audio_url}"
+            upstream = f"{base}{audio_url}"
+            # Use basename for a stable proxy path: /ui/heartmula/audio/{filename}
+            from urllib.parse import urlparse
+
+            parsed = urlparse(upstream)
+            filename = parsed.path.rsplit("/", 1)[-1]
+            if filename:
+                out["audio_url"] = f"/ui/heartmula/audio/{filename}"
+                # Preserve the original upstream URL for debugging
+                out.setdefault("_gateway", {}).update({"upstream_audio_url": upstream})
+            else:
+                # Fallback: expose the absolute upstream url
+                out["audio_url"] = upstream
 
         gw = out.get("_gateway")
         if not isinstance(gw, dict):
