@@ -231,6 +231,11 @@ def get_registry() -> BackendRegistry:
     return _registry
 
 
+def get_backends() -> BackendRegistry:
+    """Get the global backend registry (alias for get_registry)."""
+    return get_registry()
+
+
 def get_admission_controller() -> AdmissionController:
     """Get the global admission controller."""
     if _admission is None:
