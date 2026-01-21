@@ -1,5 +1,7 @@
 import os
 import pytest
+import pytest_asyncio
+import httpx
 
 
 # The app config requires a bearer token at import time. Provide a test-only
@@ -22,3 +24,13 @@ def init_test_backends():
     # Don't start the background checker in tests
     
     yield
+
+
+@pytest_asyncio.fixture
+async def client():
+    """Provide an async HTTP client for testing the FastAPI app."""
+    from app.main import app
+    
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        yield client

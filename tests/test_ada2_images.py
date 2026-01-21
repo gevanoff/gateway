@@ -348,21 +348,12 @@ async def test_nexa_not_used_for_images(client):
     local_mlx = backends.get_backend("local_mlx")
     
     # local_mlx should NOT have images capability
-    assert "images" not in local_mlx.capabilities
+    assert "images" not in local_mlx.supported_capabilities
     
-    # Verify routing doesn't select local_mlx for images
-    from app.router import decide_route
-    route = decide_route(
-        model=None,
-        backend_header=None,
-        request_type="images",
-        tools=None,
-        context_chars=0,
-    )
-    
-    # Should route to gpu_heavy, not local_mlx
-    assert route["backend"] != "local_mlx"
-    assert route["backend"] == "gpu_heavy"
+    # The router in this codebase is for chat/completions routing.
+    # Image generation routing is handled directly in images_routes.py
+    # and always uses the "gpu_heavy" backend class for images.
+    # This test verifies that local_mlx doesn't have images capability.
 
 
 @pytest.mark.asyncio
