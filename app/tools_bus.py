@@ -378,6 +378,7 @@ def _run_subprocess_tool(*, exec_spec: Dict[str, Any], args: Dict[str, Any]) -> 
             capture_output=True,
             text=True,
             timeout=timeout_sec,
+            env=os.environ,
             check=False,
         )
         try:
