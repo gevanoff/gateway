@@ -90,6 +90,12 @@ async def generate_music(*, backend_class: str, body: Dict[str, Any]) -> Dict[st
 
     # Ensure stable envelope for UI/debugging.
     if isinstance(out, dict):
+        # If HeartMula returned a local audio path like "/audio/<id>.wav", turn it into an absolute URL
+        # so the browser can fetch it from the HeartMula server (or a proxied address).
+        audio_url = out.get("audio_url")
+        if isinstance(audio_url, str) and audio_url.startswith("/"):
+            out["audio_url"] = f"{base}{audio_url}"
+
         gw = out.get("_gateway")
         if not isinstance(gw, dict):
             gw = {}
