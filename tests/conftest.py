@@ -1,5 +1,7 @@
 import os
 import pytest
+import pytest_asyncio
+import httpx
 
 
 # The app config requires a bearer token at import time. Provide a test-only
@@ -9,6 +11,9 @@ os.environ["GATEWAY_BEARER_TOKEN"] = "test-token"
 # Avoid tests making real network calls for embeddings/memory.
 os.environ["MEMORY_ENABLED"] = "false"
 os.environ["MEMORY_V2_ENABLED"] = "false"
+
+# Set a writable memory DB path for tests
+os.environ.setdefault("MEMORY_DB_PATH", "/tmp/test_memory.db")
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -22,3 +27,16 @@ def init_test_backends():
     # Don't start the background checker in tests
     
     yield
+
+
+@pytest_asyncio.fixture
+async def client():
+    """Create an httpx.AsyncClient for testing the FastAPI app."""
+    from app.main import app
+    
+    # Use the test token for authentication
+    headers = {"Authorization": "Bearer test-token"}
+    
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=headers) as ac:
+        yield ac
