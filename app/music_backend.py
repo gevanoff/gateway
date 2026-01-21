@@ -50,6 +50,18 @@ async def generate_music(*, backend_class: str, body: Dict[str, Any]) -> Dict[st
         raise RuntimeError("HEARTMULA_BASE_URL is required (or set base_url for heartmula_music in backends_config.yaml)")
 
     timeout = _effective_timeout_sec()
+    # If the caller provided a duration, increase timeout heuristically to allow longer generations.
+    # Use a conservative multiplier: 5s per second of audio plus a 30s buffer.
+    try:
+        dur = float(body.get("duration", 0) or 0)
+        if dur > 0:
+            suggested = dur * 5.0 + 30.0
+            if suggested > timeout:
+                timeout = suggested
+    except Exception:
+        # Ignore if duration isn't a number
+        pass
+
     path = _effective_generate_path()
 
     # Best-effort: allow callers to send "input" instead of "prompt".
