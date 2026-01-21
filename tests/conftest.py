@@ -31,12 +31,9 @@ def init_test_backends():
 
 @pytest_asyncio.fixture
 async def client():
-    """Create an httpx.AsyncClient for testing the FastAPI app."""
+    """Provide an async HTTP client for testing the FastAPI app."""
     from app.main import app
     
-    # Use the test token for authentication
-    headers = {"Authorization": "Bearer test-token"}
-    
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=headers) as ac:
-        yield ac
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        yield client
