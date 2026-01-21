@@ -1600,10 +1600,19 @@ async def v1_tools_exec(req: Request, name: str):
     require_bearer(req)
     _rate_limit(req)
     body = await req.json()
-    tr = ToolExecRequest(**body)
+
+    # Accept two forms for convenience:
+    # 1) { "arguments": { ... } }  (explicit)
+    # 2) { "prompt": "...", "duration": 30 } (shortcut where the body IS the arguments)
+    if isinstance(body, dict) and "arguments" not in body:
+        args = body
+    else:
+        tr = ToolExecRequest(**body)
+        args = tr.arguments
+
     return await run_in_threadpool(
         _execute_tool,
         name,
-        tr.arguments,
+        args,
         allowed_tools=_allowed_tool_names_for_req(req),
     )
