@@ -104,6 +104,10 @@ Options:
 
 Deterministic single-process agent loop with replayable transcripts.
 
+Agent specs can be provided via a JSON file (set `AGENT_SPECS_PATH` in env).
+An example is included at `env/agent_specs.json.example` and allows creating a `music` agent
+that explicitly allowlists the `heartmula_generate` tool.
+
 Endpoints (bearer-protected):
 
 - `POST /v1/agent/run`
