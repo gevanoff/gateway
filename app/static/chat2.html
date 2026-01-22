@@ -29,6 +29,12 @@
       .right { display:flex; flex-direction:column; gap:10px; }
       .pill { display:inline-flex; gap:8px; align-items:center; padding: 6px 10px; border: 1px solid rgba(231,237,246,0.12); border-radius: 999px; background: rgba(231,237,246,0.03); }
       img.gen { max-width: 100%; height: auto; display: block; border-radius: 12px; border: 1px solid rgba(231,237,246,0.12); }
+      /* Progress bar */
+      .progress {
+        width: 100%; background: rgba(231,237,246,0.06); border-radius: 8px; height: 10px; overflow: hidden; margin-top: 8px;
+      }
+      .progress-inner { height: 10px; background: linear-gradient(90deg,#6fb8ff,#8be3c9); width: 0%; transition: width 0.2s linear; }
+      .progress-text { font-size: 12px; color: #a9b4c3; margin-top: 6px; }
       @media (max-width: 760px) { .composer { flex-direction: column; } }
     </style>
   </head>

@@ -134,6 +134,44 @@
     loadModelsEl.disabled = busy;
   }
 
+  // Progress utilities for inline generation (simulated incremental progress)
+  function _createProgressEl() {
+    const wrap = document.createElement('div');
+    wrap.className = 'progress-wrapper';
+    const bar = document.createElement('div');
+    bar.className = 'progress';
+    const inner = document.createElement('div');
+    inner.className = 'progress-inner';
+    bar.appendChild(inner);
+    const txt = document.createElement('div');
+    txt.className = 'progress-text';
+    txt.textContent = 'Starting...';
+    wrap.appendChild(bar);
+    wrap.appendChild(txt);
+    return {wrap, inner, txt};
+  }
+
+  function _startProgress(inner, txt) {
+    let pct = 0;
+    txt.textContent = '0%';
+    const id = setInterval(() => {
+      // advance slower as we get closer to 95%
+      const step = Math.max(1, Math.floor((100 - pct) / 20));
+      pct = Math.min(95, pct + step);
+      inner.style.width = pct + '%';
+      txt.textContent = pct + '%';
+    }, 300);
+    return () => {
+      clearInterval(id);
+      inner.style.width = '100%';
+      txt.textContent = '100%';
+      setTimeout(() => {
+        // fade out
+        try { inner.style.width = '0%'; txt.textContent = ''; } catch (e) {}
+      }, 250);
+    };
+  }
+
   function _setModelOptions(modelIds, preferred) {
     const prev = modelEl.value;
     modelEl.innerHTML = "";
@@ -312,11 +350,10 @@
     addMessage({ role: "user", content: prompt });
 
     const assistant = addMessage({ role: "assistant", content: "", meta: "Assistant" });
-    const thinkingEl = document.createElement("div");
-    thinkingEl.className = "thinking";
-    thinkingEl.style.display = "block";
-    thinkingEl.textContent = "Generating music...";
-    assistant.wrap.insertBefore(thinkingEl, assistant.contentEl);
+    // show progress bar
+    const {wrap, inner, txt} = _createProgressEl();
+    assistant.contentEl.appendChild(wrap);
+    const stopProgress = _startProgress(inner, txt);
 
     try {
       const body = { prompt, duration: durationSec };
@@ -328,7 +365,8 @@
 
       const text = await resp.text();
       if (!resp.ok) {
-        thinkingEl.style.display = "none";
+        try { stopProgress(); } catch (e) {}
+        try { wrap.remove(); } catch (e) {}
         assistant.contentEl.textContent = text;
         assistant.metaEl.textContent = `Music HTTP ${resp.status}`;
         return;
@@ -350,13 +388,15 @@
 
       await appendToConversation({ role: "assistant", type: "audio", url, prompt, backend: payload?._gateway?.backend, model: payload?._gateway?.upstream_model || payload?._gateway?.model });
 
-      // Render inline audio
-      assistant.wrap.removeChild(thinkingEl);
+      // Stop and remove progress, then render inline audio
+      try { stopProgress(); } catch (e) {}
+      try { wrap.remove(); } catch (e) {}
       assistant.contentEl.innerHTML = `<audio controls src="${escapeHtml(url)}"></audio>`;
       assistant.metaEl.textContent = metaBits.length ? `Audio • ${metaBits.join(" • ")}` : "Audio";
       history.push({ role: "assistant", content: `audio:${url}` });
     } catch (e) {
-      thinkingEl.style.display = "none";
+      try { stopProgress(); } catch (e2) {}
+      try { wrap.remove(); } catch (e2) {}
       assistant.contentEl.textContent = String(e);
       assistant.metaEl.textContent = "error";
     }
@@ -376,6 +416,12 @@
   }
 
   async function generateImageFromPrompt(prompt) {
+    // Create assistant bubble and show progress
+    const assistant = addMessage({ role: "assistant", content: "", meta: "Assistant" });
+    const {wrap, inner, txt} = _createProgressEl();
+    assistant.contentEl.appendChild(wrap);
+    const stopProgress = _startProgress(inner, txt);
+
     const imageRequest = { prompt, size: "1024x1024", n: 1 };
     const resp = await fetch("/ui/api/image", {
       method: "POST",
@@ -415,6 +461,8 @@
     if (payload?._gateway?.ui_image_sha256) metaBits.push(`sha=${String(payload._gateway.ui_image_sha256).slice(0, 12)}`);
 
     if (!src) {
+      try { stopProgress(); } catch (e) {}
+      try { wrap.remove(); } catch (e) {}
       addMessage({ role: "system", content: JSON.stringify(payload, null, 2), meta: "Image OK (no data)" });
       return;
     }
@@ -432,6 +480,10 @@
     });
 
     const link = buildImageUiUrl({ prompt, image_request: imageRequest });
+
+    // stop & remove progress
+    try { stopProgress(); } catch (e) {}
+    try { wrap.remove(); } catch (e) {}
 
     addMessage({
       role: "assistant",

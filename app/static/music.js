@@ -26,6 +26,40 @@
     galleryEl.innerHTML = "";
   }
 
+  // UI progress helpers
+  function _createUiProgress() {
+    const wrap = document.createElement('div');
+    wrap.className = 'progress-wrapper';
+    const bar = document.createElement('div');
+    bar.className = 'progress';
+    const inner = document.createElement('div');
+    inner.className = 'progress-inner';
+    bar.appendChild(inner);
+    const txt = document.createElement('div');
+    txt.className = 'progress-text';
+    txt.textContent = '0%';
+    wrap.appendChild(bar);
+    wrap.appendChild(txt);
+    return {wrap, inner, txt};
+  }
+
+  function _startUiProgress(inner, txt) {
+    let pct = 0;
+    txt.textContent = '0%';
+    const id = setInterval(() => {
+      const step = Math.max(1, Math.floor((100 - pct) / 18));
+      pct = Math.min(95, pct + step);
+      inner.style.width = pct + '%';
+      txt.textContent = pct + '%';
+    }, 300);
+    return () => {
+      clearInterval(id);
+      inner.style.width = '100%';
+      txt.textContent = '100%';
+      setTimeout(() => { try { inner.style.width = '0%'; txt.textContent = ''; } catch (e) {} }, 300);
+    };
+  }
+
   function parseNum(value) {
     const s = String(value || "").trim();
     if (!s) return null;
@@ -143,7 +177,16 @@
     generateEl.disabled = true;
     setStatus("Generating...", false);
 
+    // show progress bar
+    const progressContainer = $("music_progress");
+    let stop = null;
+    let progWrap = null;
     try {
+      const {wrap, inner, txt} = _createUiProgress();
+      progWrap = wrap;
+      if (progressContainer) progressContainer.appendChild(wrap);
+      stop = _startUiProgress(inner, txt);
+
       const resp = await fetch("/ui/api/music", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -161,9 +204,15 @@
       debugEl.textContent = JSON.stringify({ request: body, response: payload }, null, 2);
 
       if (!resp.ok) {
+        try { if (stop) stop(); } catch (e) {}
+        try { if (progWrap) progWrap.remove(); } catch (e) {}
         setStatus(`HTTP ${resp.status}: ${typeof payload === "string" ? payload : JSON.stringify(payload)}`, true);
         return;
       }
+
+      // finish progress
+      try { if (stop) stop(); } catch (e) {}
+      try { if (progWrap) progWrap.remove(); } catch (e) {}
 
       const gw = payload?._gateway;
       const bits = [];

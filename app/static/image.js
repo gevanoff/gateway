@@ -167,7 +167,35 @@
     generateEl.disabled = true;
     setStatus("Generating...", false);
 
+    // show progress
+    const progressContainer = document.getElementById('status');
+    let stop = null;
+    let progWrap = null;
     try {
+      const wrapEl = document.createElement('div');
+      wrapEl.className = 'progress-wrapper';
+      const bar = document.createElement('div');
+      bar.className = 'progress';
+      const inner = document.createElement('div');
+      inner.className = 'progress-inner';
+      bar.appendChild(inner);
+      const txt = document.createElement('div');
+      txt.className = 'progress-text';
+      txt.textContent = '0%';
+      wrapEl.appendChild(bar);
+      wrapEl.appendChild(txt);
+      progWrap = wrapEl;
+      if (progressContainer) progressContainer.appendChild(wrapEl);
+
+      let pct = 0;
+      const id = setInterval(() => {
+        const step = Math.max(1, Math.floor((100 - pct) / 20));
+        pct = Math.min(95, pct + step);
+        inner.style.width = pct + '%';
+        txt.textContent = pct + '%';
+      }, 300);
+      stop = () => { clearInterval(id); inner.style.width = '100%'; txt.textContent = '100%'; setTimeout(()=>{ try{ inner.style.width='0%'; txt.textContent=''; progWrap.remove(); }catch(e){} }, 300); };
+
       const resp = await fetch("/ui/api/image", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -185,9 +213,12 @@
       debugEl.textContent = JSON.stringify({ request: body, response: payload }, null, 2);
 
       if (!resp.ok) {
+        try { if (stop) stop(); } catch (e) {}
         setStatus(`HTTP ${resp.status}: ${typeof payload === "string" ? payload : JSON.stringify(payload)}`, true);
         return;
       }
+
+      try { if (stop) stop(); } catch (e) {}
 
       const gw = payload?._gateway;
       const bits = [];
