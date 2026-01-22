@@ -80,17 +80,17 @@
           <summary>Advanced options</summary>
           <div class="row" style="margin-top:10px">
             <label>
-              <span title="Controls creativity/randomness: 0.0 = predictable, 1.0 = balanced, 2.0 = very creative">Temperature</span>
+              <span title="Creativity Level (0.0-2.0): Low (0.0-0.5)=predictable/safe, Medium (0.7-1.0)=balanced, High (1.5-2.0)=experimental/wild">Creativity</span>
               <input id="temperature" type="number" min="0" max="2" step="0.01" placeholder="0.8" />
             </label>
 
             <label>
-              <span title="Nucleus sampling: considers tokens with cumulative probability up to this value (0.9 = top 90% likely)">Top-p</span>
+              <span title="Focus Range (0.0-1.0): Low (0.1-0.5)=narrow focus on most likely elements, High (0.9-1.0)=broad inclusion of diverse options">Focus</span>
               <input id="top_p" type="number" min="0" max="1" step="0.01" placeholder="0.95" />
             </label>
 
             <label>
-              <span title="Limits to top K most likely tokens: 0 = no limit, 50 = top 50 most likely">Top-k</span>
+              <span title="Choice Limit (0-100): Low (1-10)=very restrictive/predictable, Medium (20-50)=balanced variety, High (50+)=maximum creativity">Choices</span>
               <input id="top_k" type="number" min="0" max="100" step="1" placeholder="0" />
             </label>
           </div>
