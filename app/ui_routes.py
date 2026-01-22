@@ -250,6 +250,31 @@ async def ui_image_frontend(req: Request) -> HTMLResponse:
     return HTMLResponse(html_path.read_text(encoding="utf-8"))
 
 
+@router.get("/ui/music", include_in_schema=False)
+async def ui_music_frontend(req: Request) -> HTMLResponse:
+    _require_ui_access(req)
+    html_path = Path(__file__).with_name("static").joinpath("music.html")
+    return HTMLResponse(html_path.read_text(encoding="utf-8"))
+
+
+@router.post("/ui/api/music", include_in_schema=False)
+async def ui_api_music(req: Request) -> Dict[str, Any]:
+    _require_ui_access(req)
+    body = await req.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="body must be an object")
+
+    # Best-effort: forward to music backend and return its normalized response.
+    from app.music_backend import generate_music
+
+    try:
+        out = await generate_music(backend_class=getattr(S, "MUSIC_BACKEND_CLASS", "heartmula_music"), body=body)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"music backend failed: {e}")
+
+    return out
+
+
 @router.post("/ui/api/conversations/new", include_in_schema=False)
 async def ui_conversation_new(req: Request) -> Dict[str, Any]:
     _require_ui_access(req)
