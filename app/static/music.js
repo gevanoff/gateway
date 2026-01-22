@@ -1,7 +1,8 @@
 (() => {
   const $ = (id) => document.getElementById(id);
 
-  const promptEl = $("prompt");
+  const styleEl = $("style");
+  const lyricsEl = $("lyrics");
   const durationEl = $("duration");
   const modelEl = $("model");
   const tempEl = $("temperature");
@@ -68,13 +69,16 @@
   }
 
   function buildRequestBody() {
-    const prompt = String(promptEl.value || "").trim();
-    if (!prompt) throw new Error("prompt required");
+    const style = String(styleEl.value || "").trim();
+    const lyrics = String(lyricsEl.value || "").trim();
+    if (!style && !lyrics) throw new Error("style or lyrics required");
 
     const body = {
-      prompt,
       duration: Math.max(1, Math.min(300, parseInt(String(durationEl.value || "15"), 10) || 15)),
     };
+
+    if (style) body.style = style;
+    if (lyrics) body.lyrics = lyrics;
 
     const model = String(modelEl.value || "").trim();
     if (model) body.model = model;
@@ -142,14 +146,16 @@
   function readQueryPrefill() {
     const qs = new URLSearchParams(location.search || "");
 
-    const prompt = qs.get("prompt");
+    const style = qs.get("style");
+    const lyrics = qs.get("lyrics");
     const duration = qs.get("duration");
     const model = qs.get("model");
     const temperature = qs.get("temperature");
     const top_p = qs.get("top_p");
     const top_k = qs.get("top_k");
 
-    if (prompt && promptEl) promptEl.value = prompt;
+    if (style && styleEl) styleEl.value = style;
+    if (lyrics && lyricsEl) lyricsEl.value = lyrics;
     if (duration && durationEl) durationEl.value = duration;
     if (model && modelEl) modelEl.value = model;
     if (temperature && tempEl) tempEl.value = temperature;
@@ -232,7 +238,7 @@
 
   generateEl.addEventListener("click", () => void generate());
 
-  promptEl.addEventListener("keydown", (e) => {
+  styleEl.addEventListener("keydown", (e) => {
     if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
       e.preventDefault();
       void generate();

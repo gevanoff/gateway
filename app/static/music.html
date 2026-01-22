@@ -52,8 +52,12 @@
         <div class="row" style="justify-content:space-between">
           <div class="row" style="gap:12px">
             <label style="min-width: 220px; flex: 1 1 420px;">
-              <span>Prompt</span>
-              <textarea id="prompt" placeholder="Describe the music you want..."></textarea>
+              <span>Style / Genre</span>
+              <textarea id="style" placeholder="e.g. phonk, dark electronic, instrumental"></textarea>
+            </label>
+            <label style="min-width: 220px; flex: 1 1 420px;">
+              <span>Lyrics (optional)</span>
+              <textarea id="lyrics" placeholder="Song lyrics here... (leave empty for instrumental)"></textarea>
             </label>
           </div>
         </div>
@@ -76,17 +80,17 @@
           <summary>Advanced options</summary>
           <div class="row" style="margin-top:10px">
             <label>
-              <span>Temperature</span>
+              <span title="Controls creativity/randomness: 0.0 = predictable, 1.0 = balanced, 2.0 = very creative">Temperature</span>
               <input id="temperature" type="number" min="0" max="2" step="0.01" placeholder="0.8" />
             </label>
 
             <label>
-              <span>Top-p</span>
+              <span title="Nucleus sampling: considers tokens with cumulative probability up to this value (0.9 = top 90% likely)">Top-p</span>
               <input id="top_p" type="number" min="0" max="1" step="0.01" placeholder="0.95" />
             </label>
 
             <label>
-              <span>Top-k</span>
+              <span title="Limits to top K most likely tokens: 0 = no limit, 50 = top 50 most likely">Top-k</span>
               <input id="top_k" type="number" min="0" max="100" step="1" placeholder="0" />
             </label>
           </div>
