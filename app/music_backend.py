@@ -69,6 +69,15 @@ async def generate_music(*, backend_class: str, body: Dict[str, Any]) -> Dict[st
         body = dict(body)
         body["prompt"] = body.get("input")
 
+    # Normalize tags: if it's a list, join with commas; if not a string, convert or default.
+    tags = body.get("tags")
+    if isinstance(tags, list):
+        body = dict(body)
+        body["tags"] = ",".join(str(t) for t in tags if t)
+    elif tags is not None and not isinstance(tags, str):
+        body = dict(body)
+        body["tags"] = str(tags)
+
     started = time.time()
     async with httpx.AsyncClient(timeout=timeout) as client:
         r = await client.post(f"{base}{path}", json=body)

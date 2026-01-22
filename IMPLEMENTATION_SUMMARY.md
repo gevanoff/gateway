@@ -102,6 +102,8 @@ All required components have been implemented to enforce routing, concurrency, a
 - Images stored content-addressed in `UI_IMAGE_DIR`
 - URLs served via `/ui/images/{filename}`
 
+- Music UI: a tokenless, IP-restricted playground is available at `/ui/music` which posts to `/ui/api/music`. Audio files are proxied from music backends (e.g., HeartMula) through `/ui/heartmula/audio/{filename}`, preserving upstream metadata via the `_gateway` envelope.
+
 ### 4. Health and Readiness ✅
 - Background checks every 30 seconds
 - Each backend must expose `/healthz` and `/readyz`

@@ -19,13 +19,15 @@ async def music_generations(req: Request):
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="body must be an object")
 
-    # Minimal validation: require some text prompt.
-    prompt = body.get("prompt")
-    if not isinstance(prompt, str) or not prompt.strip():
-        # Allow OpenAI-ish callers to use "input".
-        alt = body.get("input")
-        if not isinstance(alt, str) or not alt.strip():
-            raise HTTPException(status_code=400, detail="prompt must be a non-empty string")
+    # Minimal validation: require some text input (prompt, lyrics, or style).
+    has_input = False
+    for field in ["prompt", "lyrics", "style", "input"]:
+        val = body.get(field)
+        if isinstance(val, str) and val.strip():
+            has_input = True
+            break
+    if not has_input:
+        raise HTTPException(status_code=400, detail="must provide prompt, lyrics, style, or input")
 
     backend_class = (getattr(S, "MUSIC_BACKEND_CLASS", "") or "").strip() or "heartmula_music"
 

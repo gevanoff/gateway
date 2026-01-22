@@ -108,6 +108,8 @@ Agent specs can be provided via a JSON file (set `AGENT_SPECS_PATH` in env).
 An example is included at `env/agent_specs.json.example` and allows creating a `music` agent
 that explicitly allowlists the `heartmula_generate` tool.
 
+UI: the gateway exposes a tokenless, IP-restricted music playground at `/ui/music` (gated by `UI_IP_ALLOWLIST`) that calls `/ui/api/music` and proxies audio via `/ui/heartmula/audio/{filename}`.
+
 Endpoints (bearer-protected):
 
 - `POST /v1/agent/run`
