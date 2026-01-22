@@ -172,6 +172,26 @@ def load_backends_config(path: Optional[Path] = None) -> BackendRegistry:
         raw_base_url = cfg.get("base_url", "")
         base_url = os.path.expandvars(raw_base_url) if isinstance(raw_base_url, str) else ""
 
+        # Fallback: if placeholders remain (e.g., because env file was loaded via pydantic
+        # Settings rather than placed in os.environ), substitute from Settings `S`.
+        # This handles cases like "${HEARTMULA_BASE_URL}" when the process env does not
+        # contain HEARTMULA_BASE_URL but `S.HEARTMULA_BASE_URL` is configured via env_file.
+        try:
+            import re
+
+            def _replace_var(m: re.Match) -> str:
+                name = m.group(1)
+                return str(getattr(S, name, "")) or ""
+
+            if isinstance(raw_base_url, str):
+                # First, expand any env vars present
+                candidate = os.path.expandvars(raw_base_url)
+                # Then replace ${VAR} placeholders with values from S when available
+                candidate = re.sub(r"\$\{([A-Z0-9_]+)\}", _replace_var, candidate)
+                base_url = candidate
+        except Exception:
+            pass
+
         backends[name] = BackendConfig(
             backend_class=cfg.get("class", name),
             base_url=base_url,
