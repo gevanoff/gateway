@@ -105,6 +105,28 @@
     galleryEl.appendChild(div);
   }
 
+  function readQueryPrefill() {
+    const qs = new URLSearchParams(location.search || "");
+
+    const prompt = qs.get("prompt");
+    const duration = qs.get("duration");
+    const model = qs.get("model");
+    const temperature = qs.get("temperature");
+    const top_p = qs.get("top_p");
+    const top_k = qs.get("top_k");
+
+    if (prompt && promptEl) promptEl.value = prompt;
+    if (duration && durationEl) durationEl.value = duration;
+    if (model && modelEl) modelEl.value = model;
+    if (temperature && tempEl) tempEl.value = temperature;
+    if (top_p && topPEl) topPEl.value = top_p;
+    if (top_k && topKEl) topKEl.value = top_k;
+
+    // Optional: also accept a JSON blob for extra fields.
+    const extraJson = qs.get("extra");
+    if (extraJson && extraEl) extraEl.value = extraJson;
+  }
+
   async function generate() {
     setStatus("", false);
     metaEl.textContent = "";
@@ -167,4 +189,13 @@
       void generate();
     }
   });
+
+  // Prefill from query string when present (so /ui/music?prompt=... works)
+  (function () {
+    try {
+      readQueryPrefill();
+    } catch (e) {
+      // ignore
+    }
+  })();
 })();

@@ -279,6 +279,89 @@
     return false;
   }
 
+  function isLikelyMusicRequest(text) {
+    const s = String(text || "").trim().toLowerCase();
+    if (!s) return false;
+    // Explicit slash or prefix patterns
+    if (s.startsWith("/music ") || s.startsWith("music:") || s.startsWith("/song ")) return true;
+
+    // Require both a music keyword and an intent verb to avoid false positives.
+    const hasMusicWord = /\b(music|song|tune|melody|track|beat|jam|riff)\b/.test(s);
+    const hasMakeVerb = /\b(generate|create|make|compose|write|produce)\b/.test(s);
+    if (hasMusicWord && hasMakeVerb) return true;
+
+    // Some explicit phrasing.
+    if (/^(generate|create|compose|make) (me )?(a |an )?\b/.test(s) && /\b(music|song|tune|melody|track)\b/.test(s)) return true;
+
+    return false;
+  }
+
+  function extractMusicPrompt(text) {
+    const raw = String(text || "").trim();
+    if (raw.toLowerCase().startsWith("music:")) return raw.slice(6).trim();
+    if (raw.toLowerCase().startsWith("/music ")) return raw.slice(7).trim();
+    if (raw.toLowerCase().startsWith("/song ")) return raw.slice(6).trim();
+    return raw;
+  }
+
+  async function generateMusicFromPrompt(prompt, durationSec = 15) {
+    if (!prompt) return;
+
+    // Append user message and perform request.
+    history.push({ role: "user", content: prompt });
+    addMessage({ role: "user", content: prompt });
+
+    const assistant = addMessage({ role: "assistant", content: "", meta: "Assistant" });
+    const thinkingEl = document.createElement("div");
+    thinkingEl.className = "thinking";
+    thinkingEl.style.display = "block";
+    thinkingEl.textContent = "Generating music...";
+    assistant.wrap.insertBefore(thinkingEl, assistant.contentEl);
+
+    try {
+      const body = { prompt, duration: durationSec };
+      const resp = await fetch("/ui/api/music", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+
+      const text = await resp.text();
+      if (!resp.ok) {
+        thinkingEl.style.display = "none";
+        assistant.contentEl.textContent = text;
+        assistant.metaEl.textContent = `Music HTTP ${resp.status}`;
+        return;
+      }
+
+      let payload;
+      try {
+        payload = JSON.parse(text);
+      } catch {
+        thinkingEl.style.display = "none";
+        assistant.contentEl.textContent = String(text);
+        return;
+      }
+
+      const url = typeof payload?.audio_url === "string" ? payload.audio_url.trim() : "";
+      const metaBits = [];
+      if (payload?._gateway?.backend) metaBits.push(`backend=${payload._gateway.backend}`);
+      if (payload?._gateway?.backend_class) metaBits.push(`class=${payload._gateway.backend_class}`);
+
+      await appendToConversation({ role: "assistant", type: "audio", url, prompt, backend: payload?._gateway?.backend, model: payload?._gateway?.upstream_model || payload?._gateway?.model });
+
+      // Render inline audio
+      assistant.wrap.removeChild(thinkingEl);
+      assistant.contentEl.innerHTML = `<audio controls src="${escapeHtml(url)}"></audio>`;
+      assistant.metaEl.textContent = metaBits.length ? `Audio • ${metaBits.join(" • ")}` : "Audio";
+      history.push({ role: "assistant", content: `audio:${url}` });
+    } catch (e) {
+      thinkingEl.style.display = "none";
+      assistant.contentEl.textContent = String(e);
+      assistant.metaEl.textContent = "error";
+    }
+  }
+
   function extractImagePrompt(text) {
     const raw = String(text || "").trim();
     if (raw.toLowerCase().startsWith("image:")) return raw.slice(6).trim();
@@ -524,7 +607,7 @@
 
     inputEl.value = "";
 
-    const shouldImage = autoImageEl && autoImageEl.checked ? isLikelyImageRequest(text) : false;
+      const shouldImage = autoImageEl && autoImageEl.checked ? isLikelyImageRequest(text) : false;
     if (shouldImage) {
       const prompt = extractImagePrompt(text);
 
@@ -536,6 +619,28 @@
       return;
     }
 
+    // Music handling: explicit /music command performs the generation inline; auto-detect opens the Music UI.
+    const shouldMusicAuto = autoMusicEl && autoMusicEl.checked ? isLikelyMusicRequest(text) : false;
+    const isExplicitMusic = (String(text || "").trim().toLowerCase().startsWith("/music ") || String(text || "").trim().toLowerCase().startsWith("music:") || String(text || "").trim().toLowerCase().startsWith("/song "));
+
+    if (isExplicitMusic) {
+      const prompt = extractMusicPrompt(text);
+      await generateMusicFromPrompt(prompt, 15);
+      return;
+    }
+
+    if (shouldMusicAuto) {
+      // Open the Music UI prefilled in a new tab so user can refine.
+      const prompt = encodeURIComponent(extractMusicPrompt(text));
+      const url = prompt ? `/ui/music?prompt=${prompt}` : `/ui/music`;
+      window.open(url, "_blank");
+
+      history.push({ role: "user", content: text });
+      addMessage({ role: "system", content: "Opened Music UI" });
+      await appendToConversation({ role: "user", content: text });
+      return;
+    }
+
     await sendChatMessage(text);
   }
 
@@ -544,6 +649,25 @@
   if (autoImageEl) {
     autoImageEl.addEventListener("change", () => saveAutoImageSetting());
   }
+  // Auto-detect music setting
+  const autoMusicEl = $("autoMusic");
+  function loadAutoMusicSetting() {
+    if (!autoMusicEl) return;
+    const raw = (localStorage.getItem("gw_ui2_auto_music") || "").trim().toLowerCase();
+    if (raw === "1" || raw === "true" || raw === "yes" || raw === "on") {
+      autoMusicEl.checked = true;
+      return;
+    }
+    autoMusicEl.checked = false;
+  }
+  function saveAutoMusicSetting() {
+    if (!autoMusicEl) return;
+    localStorage.setItem("gw_ui2_auto_music", autoMusicEl.checked ? "1" : "0");
+  }
+  if (autoMusicEl) {
+    autoMusicEl.addEventListener("change", () => saveAutoMusicSetting());
+  }
+
   clearEl.addEventListener("click", () => {
     history = [];
     chatEl.innerHTML = "";
@@ -551,6 +675,7 @@
     conversationId = "";
     localStorage.removeItem(CONVO_KEY);
   });
+
 
   inputEl.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) {
