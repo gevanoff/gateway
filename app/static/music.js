@@ -159,6 +159,14 @@
     links.innerHTML = `
       <a href="${url}" target="_blank" rel="noreferrer">Open</a>
       <a href="#" data-copy="${url}">Copy URL</a>
+    div.innerHTML = `
+      <div style="display:flex; flex-direction:column; gap:10px;">
+        <audio controls src="${url}"></audio>
+        <div style="display:flex; gap:12px; justify-content:flex-end;">
+          <a href="${url}" target="_blank" rel="noreferrer">Open</a>
+          <a href="#" data-copy="${url}">Copy URL</a>
+        </div>
+      </div>
     `;
 
     wrapper.appendChild(audio);
