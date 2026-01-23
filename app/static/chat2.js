@@ -98,6 +98,85 @@
     return { wrap, metaEl, contentEl };
   }
 
+  function formatTime(seconds) {
+    const total = Number.isFinite(seconds) ? Math.max(0, seconds) : 0;
+    const mins = Math.floor(total / 60);
+    const secs = Math.floor(total % 60);
+    return `${mins}:${secs.toString().padStart(2, "0")}`;
+  }
+
+  function createAudioPlayer(url) {
+    const wrap = document.createElement("div");
+    wrap.className = "audio-card";
+
+    const audio = document.createElement("audio");
+    audio.src = url;
+    audio.preload = "metadata";
+
+    const controls = document.createElement("div");
+    controls.className = "audio-controls";
+
+    const meta = document.createElement("div");
+    meta.className = "audio-meta";
+    const currentEl = document.createElement("span");
+    currentEl.textContent = "0:00";
+    const totalEl = document.createElement("span");
+    totalEl.textContent = "0:00";
+    meta.appendChild(currentEl);
+    meta.appendChild(totalEl);
+
+    const sliders = document.createElement("div");
+    sliders.className = "audio-sliders";
+
+    const seek = document.createElement("input");
+    seek.type = "range";
+    seek.min = "0";
+    seek.max = "0";
+    seek.value = "0";
+    seek.step = "0.01";
+
+    const volume = document.createElement("input");
+    volume.type = "range";
+    volume.min = "0";
+    volume.max = "1";
+    volume.step = "0.01";
+    volume.value = String(audio.volume);
+    volume.title = "Volume";
+
+    sliders.appendChild(seek);
+    sliders.appendChild(volume);
+
+    controls.appendChild(meta);
+    controls.appendChild(sliders);
+
+    wrap.appendChild(audio);
+    wrap.appendChild(controls);
+
+    audio.addEventListener("loadedmetadata", () => {
+      if (Number.isFinite(audio.duration)) {
+        seek.max = String(audio.duration);
+        totalEl.textContent = formatTime(audio.duration);
+      }
+    });
+
+    audio.addEventListener("timeupdate", () => {
+      currentEl.textContent = formatTime(audio.currentTime);
+      if (!seek.matches(":active")) {
+        seek.value = String(audio.currentTime);
+      }
+    });
+
+    seek.addEventListener("input", () => {
+      audio.currentTime = Number(seek.value);
+    });
+
+    volume.addEventListener("input", () => {
+      audio.volume = Number(volume.value);
+    });
+
+    return wrap;
+  }
+
   function renderStoredMessage(m) {
     if (!m || typeof m !== "object") return;
     const role = typeof m.role === "string" ? m.role : "assistant";
@@ -145,30 +224,18 @@
     bar.appendChild(inner);
     const txt = document.createElement('div');
     txt.className = 'progress-text';
-    txt.textContent = 'Starting...';
+    txt.textContent = 'Processing...';
     wrap.appendChild(bar);
     wrap.appendChild(txt);
     return {wrap, inner, txt};
   }
 
   function _startProgress(inner, txt) {
-    let pct = 0;
-    txt.textContent = '0%';
-    const id = setInterval(() => {
-      // advance slower as we get closer to 95%
-      const step = Math.max(1, Math.floor((100 - pct) / 20));
-      pct = Math.min(95, pct + step);
-      inner.style.width = pct + '%';
-      txt.textContent = pct + '%';
-    }, 300);
+    inner.classList.add('indeterminate');
+    txt.textContent = 'Processing...';
     return () => {
-      clearInterval(id);
-      inner.style.width = '100%';
-      txt.textContent = '100%';
-      setTimeout(() => {
-        // fade out
-        try { inner.style.width = '0%'; txt.textContent = ''; } catch (e) {}
-      }, 250);
+      inner.classList.remove('indeterminate');
+      txt.textContent = '';
     };
   }
 
@@ -376,7 +443,6 @@
       try {
         payload = JSON.parse(text);
       } catch {
-        thinkingEl.style.display = "none";
         assistant.contentEl.textContent = String(text);
         return;
       }
@@ -391,7 +457,9 @@
       // Stop and remove progress, then render inline audio
       try { stopProgress(); } catch (e) {}
       try { wrap.remove(); } catch (e) {}
-      assistant.contentEl.innerHTML = `<audio controls src="${escapeHtml(url)}"></audio>`;
+      const audioPlayer = createAudioPlayer(url);
+      assistant.contentEl.innerHTML = "";
+      assistant.contentEl.appendChild(audioPlayer);
       assistant.metaEl.textContent = metaBits.length ? `Audio • ${metaBits.join(" • ")}` : "Audio";
       history.push({ role: "assistant", content: `audio:${url}` });
     } catch (e) {
@@ -500,10 +568,14 @@
 
     // Create assistant bubble immediately, then stream into it.
     const assistant = addMessage({ role: "assistant", content: "", meta: "Assistant" });
-    const thinkingEl = document.createElement("div");
-    thinkingEl.className = "thinking";
-    thinkingEl.style.display = "none";
-    assistant.wrap.insertBefore(thinkingEl, assistant.contentEl);
+    assistant.contentEl.textContent = "";
+    const thinkingLine = document.createElement("div");
+    thinkingLine.className = "thinking-line";
+    thinkingLine.style.display = "none";
+    const contentText = document.createElement("div");
+    contentText.className = "content-text";
+    assistant.contentEl.appendChild(thinkingLine);
+    assistant.contentEl.appendChild(contentText);
 
     setBusy(true);
 
@@ -524,25 +596,25 @@
 
       if (!resp.ok) {
         const text = await resp.text();
-        assistant.contentEl.textContent = text;
+        contentText.textContent = text;
         assistant.metaEl.textContent = `HTTP ${resp.status}`;
         return;
       }
 
       const setThinking = (text) => {
         if (!text) {
-          thinkingEl.textContent = "";
-          thinkingEl.style.display = "none";
+          thinkingLine.textContent = "";
+          thinkingLine.style.display = "none";
           return;
         }
-        thinkingEl.textContent = text;
-        thinkingEl.style.display = "block";
+        thinkingLine.textContent = text;
+        thinkingLine.style.display = "block";
         scrollToBottom();
       };
 
       const showThinking = () => {
         if (hasContent || thinkingShown || !isOllama) return;
-        setThinking("Ollama is thinking…");
+        setThinking("Thinking…");
         thinkingShown = true;
       };
 
@@ -622,13 +694,13 @@
                 if (thinkingShown) setThinking("");
               }
               full += evt.delta;
-              assistant.contentEl.textContent = full;
+              contentText.textContent = full;
               scrollToBottom();
               continue;
             }
 
             if (evt.type === "error") {
-              assistant.contentEl.textContent = `${full}\n\n[error]\n${JSON.stringify(evt.error || evt, null, 2)}`;
+              contentText.textContent = `${full}\n\n[error]\n${JSON.stringify(evt.error || evt, null, 2)}`;
               updateMeta("error");
               continue;
             }
@@ -646,7 +718,7 @@
 
       history.push({ role: "assistant", content: full });
     } catch (e) {
-      assistant.contentEl.textContent = String(e);
+      contentText.textContent = String(e);
       assistant.metaEl.textContent = "error";
     } finally {
       setBusy(false);
