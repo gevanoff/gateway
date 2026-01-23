@@ -145,30 +145,18 @@
     bar.appendChild(inner);
     const txt = document.createElement('div');
     txt.className = 'progress-text';
-    txt.textContent = 'Starting...';
+    txt.textContent = 'Processing...';
     wrap.appendChild(bar);
     wrap.appendChild(txt);
     return {wrap, inner, txt};
   }
 
   function _startProgress(inner, txt) {
-    let pct = 0;
-    txt.textContent = '0%';
-    const id = setInterval(() => {
-      // advance slower as we get closer to 95%
-      const step = Math.max(1, Math.floor((100 - pct) / 20));
-      pct = Math.min(95, pct + step);
-      inner.style.width = pct + '%';
-      txt.textContent = pct + '%';
-    }, 300);
+    inner.classList.add('indeterminate');
+    txt.textContent = 'Processing...';
     return () => {
-      clearInterval(id);
-      inner.style.width = '100%';
-      txt.textContent = '100%';
-      setTimeout(() => {
-        // fade out
-        try { inner.style.width = '0%'; txt.textContent = ''; } catch (e) {}
-      }, 250);
+      inner.classList.remove('indeterminate');
+      txt.textContent = '';
     };
   }
 
@@ -376,7 +364,6 @@
       try {
         payload = JSON.parse(text);
       } catch {
-        thinkingEl.style.display = "none";
         assistant.contentEl.textContent = String(text);
         return;
       }
@@ -500,10 +487,14 @@
 
     // Create assistant bubble immediately, then stream into it.
     const assistant = addMessage({ role: "assistant", content: "", meta: "Assistant" });
-    const thinkingEl = document.createElement("div");
-    thinkingEl.className = "thinking";
-    thinkingEl.style.display = "none";
-    assistant.wrap.insertBefore(thinkingEl, assistant.contentEl);
+    assistant.contentEl.textContent = "";
+    const thinkingLine = document.createElement("div");
+    thinkingLine.className = "thinking-line";
+    thinkingLine.style.display = "none";
+    const contentText = document.createElement("div");
+    contentText.className = "content-text";
+    assistant.contentEl.appendChild(thinkingLine);
+    assistant.contentEl.appendChild(contentText);
 
     setBusy(true);
 
@@ -524,25 +515,25 @@
 
       if (!resp.ok) {
         const text = await resp.text();
-        assistant.contentEl.textContent = text;
+        contentText.textContent = text;
         assistant.metaEl.textContent = `HTTP ${resp.status}`;
         return;
       }
 
       const setThinking = (text) => {
         if (!text) {
-          thinkingEl.textContent = "";
-          thinkingEl.style.display = "none";
+          thinkingLine.textContent = "";
+          thinkingLine.style.display = "none";
           return;
         }
-        thinkingEl.textContent = text;
-        thinkingEl.style.display = "block";
+        thinkingLine.textContent = text;
+        thinkingLine.style.display = "block";
         scrollToBottom();
       };
 
       const showThinking = () => {
         if (hasContent || thinkingShown || !isOllama) return;
-        setThinking("Ollama is thinking…");
+        setThinking("Thinking…");
         thinkingShown = true;
       };
 
@@ -622,13 +613,13 @@
                 if (thinkingShown) setThinking("");
               }
               full += evt.delta;
-              assistant.contentEl.textContent = full;
+              contentText.textContent = full;
               scrollToBottom();
               continue;
             }
 
             if (evt.type === "error") {
-              assistant.contentEl.textContent = `${full}\n\n[error]\n${JSON.stringify(evt.error || evt, null, 2)}`;
+              contentText.textContent = `${full}\n\n[error]\n${JSON.stringify(evt.error || evt, null, 2)}`;
               updateMeta("error");
               continue;
             }
@@ -646,7 +637,7 @@
 
       history.push({ role: "assistant", content: full });
     } catch (e) {
-      assistant.contentEl.textContent = String(e);
+      contentText.textContent = String(e);
       assistant.metaEl.textContent = "error";
     } finally {
       setBusy(false);

@@ -257,6 +257,20 @@ async def ui_music_frontend(req: Request) -> HTMLResponse:
     return HTMLResponse(html_path.read_text(encoding="utf-8"))
 
 
+@router.get("/ui/video", include_in_schema=False)
+async def ui_video_frontend(req: Request) -> HTMLResponse:
+    _require_ui_access(req)
+    html_path = Path(__file__).with_name("static").joinpath("video.html")
+    return HTMLResponse(html_path.read_text(encoding="utf-8"))
+
+
+@router.get("/ui/tts", include_in_schema=False)
+async def ui_tts_frontend(req: Request) -> HTMLResponse:
+    _require_ui_access(req)
+    html_path = Path(__file__).with_name("static").joinpath("tts.html")
+    return HTMLResponse(html_path.read_text(encoding="utf-8"))
+
+
 @router.post("/ui/api/music", include_in_schema=False)
 async def ui_api_music(req: Request) -> Dict[str, Any]:
     _require_ui_access(req)
