@@ -17,7 +17,9 @@ from fastapi.responses import FileResponse
 from fastapi.responses import HTMLResponse
 from fastapi.responses import StreamingResponse
 
+from app.backends import check_capability, get_admission_controller, get_registry
 from app.config import S
+from app.health_checker import check_backend_ready
 from app.model_aliases import get_aliases
 from app.models import ChatCompletionRequest, ChatMessage
 from app.openai_utils import now_unix, sse, sse_done
@@ -449,6 +451,13 @@ async def ui_chat(req: Request) -> Dict[str, Any]:
     backend: Literal["ollama", "mlx"] = route.backend
     upstream_model = route.model
 
+    registry = get_registry()
+    backend_class = registry.resolve_backend_class(backend)
+    check_backend_ready(backend_class, route_kind="chat")
+    await check_capability(backend_class, "chat")
+    admission = get_admission_controller()
+    await admission.acquire(backend_class, "chat")
+
     cc_routed = ChatCompletionRequest(
         model=upstream_model if backend == "mlx" else cc.model,
         messages=cc.messages,
@@ -459,7 +468,10 @@ async def ui_chat(req: Request) -> Dict[str, Any]:
         stream=False,
     )
 
-    resp = await (call_mlx_openai(cc_routed) if backend == "mlx" else call_ollama(cc, upstream_model))
+    try:
+        resp = await (call_mlx_openai(cc_routed) if backend == "mlx" else call_ollama(cc, upstream_model))
+    finally:
+        admission.release(backend_class, "chat")
 
     # Include routing metadata so the UI can display it.
     if isinstance(resp, dict):
@@ -588,12 +600,22 @@ async def _summarize_if_needed(convo: ui_conversations.Conversation) -> ui_conve
 
     backend: Literal["ollama", "mlx"] = route.backend
     upstream_model = route.model
+
+    registry = get_registry()
+    backend_class = registry.resolve_backend_class(backend)
+    check_backend_ready(backend_class, route_kind="chat")
+    await check_capability(backend_class, "chat")
+    admission = get_admission_controller()
+    await admission.acquire(backend_class, "chat")
     cc_sum_routed = ChatCompletionRequest(
         model=upstream_model if backend == "mlx" else cc_sum.model,
         messages=cc_sum.messages,
         stream=False,
     )
-    resp = await (call_mlx_openai(cc_sum_routed) if backend == "mlx" else call_ollama(cc_sum, upstream_model))
+    try:
+        resp = await (call_mlx_openai(cc_sum_routed) if backend == "mlx" else call_ollama(cc_sum, upstream_model))
+    finally:
+        admission.release(backend_class, "chat")
     text = (((resp.get("choices") or [{}])[0].get("message") or {}).get("content") or "")
     if not isinstance(text, str):
         text = ""
@@ -670,81 +692,95 @@ async def ui_chat_stream(req: Request):
     backend: Literal["ollama", "mlx"] = route.backend
     upstream_model = route.model
 
-    cc_routed = ChatCompletionRequest(
-        model=upstream_model if backend == "mlx" else cc.model,
-        messages=cc.messages,
-        tools=None,
-        tool_choice=None,
-        temperature=cc.temperature,
-        max_tokens=cc.max_tokens,
-        stream=True,
-    )
+    registry = get_registry()
+    backend_class = registry.resolve_backend_class(backend)
+    check_backend_ready(backend_class, route_kind="chat")
+    await check_capability(backend_class, "chat")
+    admission = get_admission_controller()
+    await admission.acquire(backend_class, "chat")
 
-    if backend == "mlx":
-        payload = cc_routed.model_dump(exclude_none=True)
-        payload["model"] = upstream_model
-        payload["stream"] = True
-        upstream_gen = stream_mlx_openai_chat(payload)
-    else:
-        upstream_gen = stream_ollama_chat_as_openai(cc_routed, upstream_model)
+    try:
+        cc_routed = ChatCompletionRequest(
+            model=upstream_model if backend == "mlx" else cc.model,
+            messages=cc.messages,
+            tools=None,
+            tool_choice=None,
+            temperature=cc.temperature,
+            max_tokens=cc.max_tokens,
+            stream=True,
+        )
+
+        if backend == "mlx":
+            payload = cc_routed.model_dump(exclude_none=True)
+            payload["model"] = upstream_model
+            payload["stream"] = True
+            upstream_gen = stream_mlx_openai_chat(payload)
+        else:
+            upstream_gen = stream_ollama_chat_as_openai(cc_routed, upstream_model)
+    except Exception:
+        admission.release(backend_class, "chat")
+        raise
 
     async def gen():
-        yield sse({"type": "route", "backend": backend, "model": upstream_model, "reason": route.reason})
+        try:
+            yield sse({"type": "route", "backend": backend, "model": upstream_model, "reason": route.reason})
 
-        full_text = ""
+            full_text = ""
 
-        async for chunk in upstream_gen:
-            for line in chunk.splitlines():
-                if not line.startswith(b"data:"):
-                    continue
-                data = line[len(b"data:") :].strip()
-                if data == b"[DONE]":
-                    yield sse({"type": "done"})
-                    yield sse_done()
-                    return
+            async for chunk in upstream_gen:
+                for line in chunk.splitlines():
+                    if not line.startswith(b"data:"):
+                        continue
+                    data = line[len(b"data:") :].strip()
+                    if data == b"[DONE]":
+                        yield sse({"type": "done"})
+                        yield sse_done()
+                        return
 
+                    try:
+                        j = json.loads(data)
+                    except Exception:
+                        continue
+
+                    if isinstance(j, dict) and isinstance(j.get("error"), dict):
+                        yield sse({"type": "error", "error": j.get("error")})
+                        continue
+
+                    try:
+                        delta = (((j or {}).get("choices") or [{}])[0].get("delta") or {})
+                        text = delta.get("content")
+                        thinking = delta.get("thinking")
+                    except Exception:
+                        text = None
+                        thinking = None
+
+                    if isinstance(thinking, str) and thinking:
+                        yield sse({"type": "thinking", "thinking": thinking})
+
+                    if isinstance(text, str) and text:
+                        full_text += text
+                        yield sse({"type": "delta", "delta": text})
+
+            # Persist assistant message if we have a server-side conversation.
+            if conversation_id:
                 try:
-                    j = json.loads(data)
+                    ui_conversations.append_message(
+                        conversation_id,
+                        {
+                            "role": "assistant",
+                            "content": full_text,
+                            "backend": backend,
+                            "model": upstream_model,
+                            "reason": route.reason,
+                        },
+                    )
                 except Exception:
-                    continue
+                    pass
 
-                if isinstance(j, dict) and isinstance(j.get("error"), dict):
-                    yield sse({"type": "error", "error": j.get("error")})
-                    continue
-
-                try:
-                    delta = (((j or {}).get("choices") or [{}])[0].get("delta") or {})
-                    text = delta.get("content")
-                    thinking = delta.get("thinking")
-                except Exception:
-                    text = None
-                    thinking = None
-
-                if isinstance(thinking, str) and thinking:
-                    yield sse({"type": "thinking", "thinking": thinking})
-
-                if isinstance(text, str) and text:
-                    full_text += text
-                    yield sse({"type": "delta", "delta": text})
-
-        # Persist assistant message if we have a server-side conversation.
-        if conversation_id:
-            try:
-                ui_conversations.append_message(
-                    conversation_id,
-                    {
-                        "role": "assistant",
-                        "content": full_text,
-                        "backend": backend,
-                        "model": upstream_model,
-                        "reason": route.reason,
-                    },
-                )
-            except Exception:
-                pass
-
-        yield sse({"type": "done"})
-        yield sse_done()
+            yield sse({"type": "done"})
+            yield sse_done()
+        finally:
+            admission.release(backend_class, "chat")
 
     out = StreamingResponse(gen(), media_type="text/event-stream")
     out.headers["X-Backend-Used"] = backend
