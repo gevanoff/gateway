@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import io
 import hashlib
 import ipaddress
 import json
@@ -15,6 +16,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 from fastapi.responses import HTMLResponse
+from fastapi.responses import JSONResponse
 from fastapi.responses import StreamingResponse
 
 from app.backends import check_capability, get_admission_controller, get_registry
@@ -27,6 +29,9 @@ from app.router import decide_route
 from app.router_cfg import router_cfg
 from app.upstreams import call_mlx_openai, call_ollama, stream_mlx_openai_chat, stream_ollama_chat_as_openai
 from app.images_backend import generate_images
+from app.backends import check_capability, get_admission_controller
+from app.health_checker import check_backend_ready
+from app.tts_backend import generate_tts
 from app import ui_conversations
 
 
@@ -160,6 +165,22 @@ def _sniff_mime(raw: bytes) -> str | None:
     return None
 
 
+def _gateway_headers(meta: Dict[str, Any]) -> Dict[str, str]:
+    headers: Dict[str, str] = {}
+    if not isinstance(meta, dict):
+        return headers
+    backend = meta.get("backend")
+    backend_class = meta.get("backend_class")
+    latency = meta.get("upstream_latency_ms")
+    if backend:
+        headers["x-gateway-backend"] = str(backend)
+    if backend_class:
+        headers["x-gateway-backend-class"] = str(backend_class)
+    if latency is not None:
+        headers["x-gateway-upstream-latency-ms"] = str(latency)
+    return headers
+
+
 def _decode_image_b64(b64_or_data_url: str) -> tuple[bytes, str | None]:
     s = (b64_or_data_url or "").strip()
     if not s:
@@ -289,6 +310,44 @@ async def ui_api_music(req: Request) -> Dict[str, Any]:
         raise HTTPException(status_code=502, detail=f"music backend failed: {e}")
 
     return out
+
+
+@router.post("/ui/api/tts", include_in_schema=False)
+async def ui_api_tts(req: Request):
+    _require_ui_access(req)
+    body = await req.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="body must be an object")
+    text = body.get("text")
+    if not isinstance(text, str) or not text.strip():
+        alt = body.get("input")
+        if not isinstance(alt, str) or not alt.strip():
+            raise HTTPException(status_code=400, detail="text is required")
+
+    backend_class = (getattr(S, "TTS_BACKEND_CLASS", "") or "").strip() or "pocket_tts"
+
+    check_backend_ready(backend_class, route_kind="tts")
+    await check_capability(backend_class, "tts")
+
+    admission = get_admission_controller()
+    await admission.acquire(backend_class, "tts")
+    try:
+        result = await generate_tts(backend_class=backend_class, body=body)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"tts backend failed: {e}")
+    finally:
+        admission.release(backend_class, "tts")
+
+    headers = _gateway_headers(result.gateway)
+    if result.kind == "json":
+        payload = result.payload
+        if isinstance(payload, dict):
+            payload.setdefault("_gateway", {}).update(result.gateway)
+        return JSONResponse(payload or {}, headers=headers)
+
+    if result.audio is None:
+        raise HTTPException(status_code=502, detail="tts backend returned no audio")
+    return StreamingResponse(io.BytesIO(result.audio), media_type=result.content_type, headers=headers)
 
 
 @router.post("/ui/api/conversations/new", include_in_schema=False)
