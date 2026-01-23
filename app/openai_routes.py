@@ -185,7 +185,7 @@ async def chat_completions(req: Request):
     backend_class = registry.resolve_backend_class(backend)
     
     # Check backend health/readiness
-    check_backend_ready(backend_class)
+    check_backend_ready(backend_class, route_kind="chat")
     
     # Check capability
     await check_capability(backend_class, "chat")

@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 import os
+from urllib.parse import urlparse
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 
@@ -61,6 +62,50 @@ class BackendRegistry:
         return self.legacy_mapping.get(backend_name, backend_name)
 
 
+def _backend_host(base_url: str) -> Optional[str]:
+    try:
+        parsed = urlparse(base_url or "")
+    except Exception:
+        return None
+    host = parsed.hostname or parsed.netloc
+    if not host:
+        return None
+    return host
+
+
+def _capability_availability(route_kind: RouteKind) -> Dict[str, Any]:
+    registry = get_registry()
+    available = []
+    for backend_class, config in registry.backends.items():
+        if not config.supports(route_kind):
+            continue
+        entry: Dict[str, Any] = {
+            "backend_class": backend_class,
+            "base_url": config.base_url,
+            "host": _backend_host(config.base_url),
+            "description": config.description,
+        }
+        try:
+            from app.health_checker import get_health_checker
+
+            checker = get_health_checker()
+            status = checker.get_status(backend_class)
+        except Exception:
+            status = None
+        if status is not None:
+            entry["healthy"] = status.is_healthy
+            entry["ready"] = status.is_ready
+            if status.error:
+                entry["health_error"] = status.error
+        available.append(entry)
+    available.sort(key=lambda item: item.get("backend_class") or "")
+    return {
+        "capability": route_kind,
+        "available_backends": available,
+        "available_count": len(available),
+    }
+
+
 class AdmissionController:
     """Enforces concurrency limits with semaphore-based admission control.
     
@@ -109,6 +154,7 @@ class AdmissionController:
                     "backend_class": backend_class,
                     "route_kind": route_kind,
                     "message": f"Backend {backend_class} does not support {route_kind}",
+                    **_capability_availability(route_kind),
                 },
             )
 
@@ -277,6 +323,7 @@ async def check_capability(backend_class: str, route_kind: RouteKind):
                 "error": "backend_not_found",
                 "backend_class": backend_class,
                 "message": f"Backend {backend_class} is not configured",
+                **_capability_availability(route_kind),
             },
         )
     
@@ -289,5 +336,6 @@ async def check_capability(backend_class: str, route_kind: RouteKind):
                 "route_kind": route_kind,
                 "message": f"Backend {backend_class} does not support {route_kind}",
                 "supported_capabilities": backend.supported_capabilities,
+                **_capability_availability(route_kind),
             },
         )

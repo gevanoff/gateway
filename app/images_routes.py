@@ -35,7 +35,7 @@ async def images_generations(req: Request):
     backend_class = (getattr(S, "IMAGES_BACKEND_CLASS", "") or "").strip() or "gpu_heavy"
     
     # Check backend health/readiness
-    check_backend_ready(backend_class)
+    check_backend_ready(backend_class, route_kind="images")
     
     # Check capability
     await check_capability(backend_class, "images")
