@@ -14,7 +14,7 @@ from typing import Dict, Optional
 import httpx
 
 from app.config import logger
-from app.backends import get_registry, BackendConfig
+from app.backends import BackendConfig, RouteKind, _backend_host, _capability_availability, get_registry
 
 
 @dataclass
@@ -187,7 +187,7 @@ def get_health_checker() -> HealthChecker:
     return _health_checker
 
 
-def check_backend_ready(backend_class: str):
+def check_backend_ready(backend_class: str, route_kind: RouteKind | None = None):
     """Check if a backend is ready. Raises HTTPException if not.
     
     This is called before routing requests to ensure the backend
@@ -202,15 +202,38 @@ def check_backend_ready(backend_class: str):
         # Health checker not available (tests, early startup)
         return
     
+    registry = get_registry()
+    backend = registry.get_backend(backend_class)
+    if backend is None:
+        detail = {
+            "error": "backend_not_found",
+            "backend_class": backend_class,
+            "message": f"Backend {backend_class} is not configured",
+        }
+        if route_kind is not None:
+            detail.update(_capability_availability(route_kind))
+        raise HTTPException(status_code=400, detail=detail)
+
     if not checker.is_ready(backend_class):
         status = checker.get_status(backend_class)
         detail = {
             "error": "backend_not_ready",
             "backend_class": backend_class,
             "message": f"Backend {backend_class} is not ready to accept requests",
+            "backend": {
+                "backend_class": backend.backend_class,
+                "base_url": backend.base_url,
+                "host": _backend_host(backend.base_url),
+                "description": backend.description,
+            },
         }
         if status and status.error:
             detail["health_error"] = status.error
+        if status:
+            detail["backend"]["healthy"] = status.is_healthy
+            detail["backend"]["ready"] = status.is_ready
+        if route_kind is not None:
+            detail.update(_capability_availability(route_kind))
         
         raise HTTPException(
             status_code=503,
