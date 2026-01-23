@@ -38,26 +38,18 @@
     bar.appendChild(inner);
     const txt = document.createElement('div');
     txt.className = 'progress-text';
-    txt.textContent = '0%';
+    txt.textContent = 'Processing...';
     wrap.appendChild(bar);
     wrap.appendChild(txt);
     return {wrap, inner, txt};
   }
 
   function _startUiProgress(inner, txt) {
-    let pct = 0;
-    txt.textContent = '0%';
-    const id = setInterval(() => {
-      const step = Math.max(1, Math.floor((100 - pct) / 18));
-      pct = Math.min(95, pct + step);
-      inner.style.width = pct + '%';
-      txt.textContent = pct + '%';
-    }, 300);
+    inner.classList.add('indeterminate');
+    txt.textContent = 'Processing...';
     return () => {
-      clearInterval(id);
-      inner.style.width = '100%';
-      txt.textContent = '100%';
-      setTimeout(() => { try { inner.style.width = '0%'; txt.textContent = ''; } catch (e) {} }, 300);
+      inner.classList.remove('indeterminate');
+      txt.textContent = '';
     };
   }
 
@@ -121,9 +113,9 @@
     const div = document.createElement("div");
     div.className = "thumb";
     div.innerHTML = `
-      <div style="display:flex; gap:8px; align-items:center; justify-content:space-between;">
-        <div style="flex:1 1 60%"><audio controls src="${url}"></audio></div>
-        <div style="display:flex; gap:8px; flex-direction:column; align-items:flex-end;">
+      <div style="display:flex; flex-direction:column; gap:10px;">
+        <audio controls src="${url}"></audio>
+        <div style="display:flex; gap:12px; justify-content:flex-end;">
           <a href="${url}" target="_blank" rel="noreferrer">Open</a>
           <a href="#" data-copy="${url}">Copy URL</a>
         </div>
