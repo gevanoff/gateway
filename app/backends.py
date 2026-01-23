@@ -19,7 +19,7 @@ from fastapi import HTTPException
 from app.config import S, logger
 
 
-RouteKind = Literal["chat", "embeddings", "images", "music"]
+RouteKind = Literal["chat", "embeddings", "images", "music", "tts"]
 
 
 @dataclass(frozen=True)
