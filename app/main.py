@@ -24,6 +24,7 @@ from app.images_routes import router as images_router
 from app.music_routes import router as music_router
 from app import memory_v2
 from app import metrics
+from app import user_store
 
 
 async def _startup_check_models() -> None:
@@ -66,6 +67,10 @@ async def lifespan(_app: FastAPI):
     
     init_backends()
     init_health_checker()
+    try:
+        user_store.init_db(S.USER_DB_PATH)
+    except Exception as e:
+        logger.warning("startup: failed to init user db (%s: %s)", type(e).__name__, e)
     
     # Start background health checking
     await start_health_checker()

@@ -60,6 +60,12 @@ class Settings(BaseSettings):
     UI_CHAT_SUMMARY_TRIGGER_BYTES: int = 250_000  # summarize when history grows beyond this
     UI_CHAT_SUMMARY_KEEP_LAST_MESSAGES: int = 12  # keep tail messages after summarizing
 
+    # User authentication + storage
+    USER_AUTH_ENABLED: bool = True
+    USER_DB_PATH: str = "/var/lib/gateway/data/users.sqlite"
+    USER_SESSION_TTL_SEC: int = 60 * 60 * 12  # 12 hours
+    USER_SESSION_COOKIE: str = "gateway_session"
+
     # Images (text-to-image)
     # Default backend is "mock" which returns an SVG placeholder.
     # Set IMAGES_BACKEND=http_a1111 and IMAGES_HTTP_BASE_URL=http://127.0.0.1:7860 to use Automatic1111's API.

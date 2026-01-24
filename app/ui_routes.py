@@ -15,6 +15,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 from fastapi.responses import HTMLResponse
+from fastapi.responses import JSONResponse
 from fastapi.responses import StreamingResponse
 
 from app.config import S
@@ -26,6 +27,7 @@ from app.router_cfg import router_cfg
 from app.upstreams import call_mlx_openai, call_ollama, stream_mlx_openai_chat, stream_ollama_chat_as_openai
 from app.images_backend import generate_images
 from app import ui_conversations
+from app import user_store
 
 
 router = APIRouter()
@@ -83,6 +85,46 @@ def _require_ui_access(req: Request) -> None:
             continue
 
     raise HTTPException(status_code=403, detail="UI denied (client IP not allowlisted)")
+
+
+def _session_cookie_name() -> str:
+    return (getattr(S, "USER_SESSION_COOKIE", "") or "gateway_session").strip() or "gateway_session"
+
+
+def _session_token_from_req(req: Request) -> str:
+    try:
+        token = (req.headers.get("authorization") or "").strip()
+        if token.lower().startswith("bearer "):
+            return token.split(" ", 1)[1].strip()
+    except Exception:
+        token = ""
+
+    try:
+        token = (req.headers.get("x-session-token") or "").strip()
+        if token:
+            return token
+    except Exception:
+        token = ""
+
+    try:
+        cookie_name = _session_cookie_name()
+        return (req.cookies or {}).get(cookie_name) or ""
+    except Exception:
+        return ""
+
+
+def _require_user(req: Request) -> Optional[user_store.User]:
+    if not getattr(S, "USER_AUTH_ENABLED", True):
+        return None
+    token = _session_token_from_req(req)
+    user = user_store.get_user_by_session(S.USER_DB_PATH, token=token)
+    if user is None:
+        raise HTTPException(status_code=401, detail="authentication required")
+    try:
+        req.state.user = user
+    except Exception:
+        pass
+    return user
 
 
 def _ui_image_dir() -> str:
@@ -274,6 +316,7 @@ async def ui_tts_frontend(req: Request) -> HTMLResponse:
 @router.post("/ui/api/music", include_in_schema=False)
 async def ui_api_music(req: Request) -> Dict[str, Any]:
     _require_ui_access(req)
+    user = _require_user(req)
     body = await req.json()
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="body must be an object")
@@ -289,25 +332,120 @@ async def ui_api_music(req: Request) -> Dict[str, Any]:
     return out
 
 
+@router.post("/ui/api/auth/login", include_in_schema=False)
+async def ui_auth_login(req: Request):
+    _require_ui_access(req)
+    body = await req.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="body must be an object")
+    username = str(body.get("username") or "").strip()
+    password = str(body.get("password") or "").strip()
+    if not username or not password:
+        raise HTTPException(status_code=400, detail="username and password required")
+    user = user_store.authenticate(S.USER_DB_PATH, username=username, password=password)
+    if user is None:
+        raise HTTPException(status_code=403, detail="invalid credentials")
+    ttl = int(getattr(S, "USER_SESSION_TTL_SEC", 0) or 0)
+    if ttl <= 0:
+        ttl = 60 * 60 * 12
+    session = user_store.create_session(S.USER_DB_PATH, user_id=user.id, ttl_sec=ttl)
+    resp = JSONResponse({"ok": True, "user": {"id": user.id, "username": user.username}})
+    resp.set_cookie(
+        _session_cookie_name(),
+        session.token,
+        max_age=ttl,
+        httponly=True,
+        secure=False,
+        samesite="lax",
+    )
+    return resp
+
+
+@router.post("/ui/api/auth/logout", include_in_schema=False)
+async def ui_auth_logout(req: Request):
+    _require_ui_access(req)
+    token = _session_token_from_req(req)
+    if token:
+        user_store.delete_session(S.USER_DB_PATH, token=token)
+    resp = JSONResponse({"ok": True})
+    resp.delete_cookie(_session_cookie_name())
+    return resp
+
+
+@router.get("/ui/api/auth/me", include_in_schema=False)
+async def ui_auth_me(req: Request) -> Dict[str, Any]:
+    _require_ui_access(req)
+    user = _require_user(req)
+    if user is None:
+        return {"authenticated": False}
+    return {"authenticated": True, "user": {"id": user.id, "username": user.username}}
+
+
+@router.get("/ui/api/user/settings", include_in_schema=False)
+async def ui_user_settings_get(req: Request) -> Dict[str, Any]:
+    _require_ui_access(req)
+    user = _require_user(req)
+    if user is None:
+        return {"settings": user_store.get_settings(S.USER_DB_PATH, user_id=-1)}
+    settings = user_store.get_settings(S.USER_DB_PATH, user_id=user.id)
+    return {"settings": settings}
+
+
+@router.put("/ui/api/user/settings", include_in_schema=False)
+async def ui_user_settings_put(req: Request) -> Dict[str, Any]:
+    _require_ui_access(req)
+    user = _require_user(req)
+    body = await req.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="body must be an object")
+    settings = body.get("settings")
+    if not isinstance(settings, dict):
+        raise HTTPException(status_code=400, detail="settings must be an object")
+    if user is None:
+        raise HTTPException(status_code=401, detail="authentication required")
+    user_store.set_settings(S.USER_DB_PATH, user_id=user.id, settings=settings)
+    return {"ok": True}
+
+
+@router.get("/ui/api/conversations", include_in_schema=False)
+async def ui_conversation_list(req: Request) -> Dict[str, Any]:
+    _require_ui_access(req)
+    user = _require_user(req)
+    if user is None:
+        return {"conversations": []}
+    return {"conversations": user_store.list_conversations(S.USER_DB_PATH, user_id=user.id)}
+
+
 @router.post("/ui/api/conversations/new", include_in_schema=False)
 async def ui_conversation_new(req: Request) -> Dict[str, Any]:
     _require_ui_access(req)
-    convo = ui_conversations.create()
-    return {"conversation_id": convo.id}
+    user = _require_user(req)
+    if user is None:
+        convo = ui_conversations.create()
+        return {"conversation_id": convo.id}
+    convo = user_store.create_conversation(S.USER_DB_PATH, user_id=user.id)
+    return {"conversation_id": convo["id"]}
 
 
 @router.get("/ui/api/conversations/{conversation_id}", include_in_schema=False)
 async def ui_conversation_get(req: Request, conversation_id: str) -> Dict[str, Any]:
     _require_ui_access(req)
-    convo = ui_conversations.load(conversation_id)
+    user = _require_user(req)
+    if user is None:
+        convo = ui_conversations.load(conversation_id)
+        if convo is None:
+            raise HTTPException(status_code=404, detail="not found")
+        return convo.to_dict()
+    convo = user_store.get_conversation(S.USER_DB_PATH, user_id=user.id, conversation_id=conversation_id)
     if convo is None:
         raise HTTPException(status_code=404, detail="not found")
-    return convo.to_dict()
+    return convo
 
 
 @router.post("/ui/api/conversations/{conversation_id}/append", include_in_schema=False)
 async def ui_conversation_append(req: Request, conversation_id: str) -> Dict[str, Any]:
     _require_ui_access(req)
+    user = _require_user(req)
     body = await req.json()
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="body must be an object")
@@ -315,19 +453,25 @@ async def ui_conversation_append(req: Request, conversation_id: str) -> Dict[str
     if not isinstance(msg, dict):
         raise HTTPException(status_code=400, detail="message must be an object")
     try:
-        convo = ui_conversations.append_message(conversation_id, msg)
+        if user is None:
+            convo = ui_conversations.append_message(conversation_id, msg)
+            updated = convo.updated
+        else:
+            convo = user_store.append_message(S.USER_DB_PATH, user_id=user.id, conversation_id=conversation_id, msg=msg)
+            updated = convo.get("updated")
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="not found")
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"failed to append: {type(e).__name__}: {e}")
-    return {"ok": True, "updated": convo.updated}
+    return {"ok": True, "updated": updated}
 
 
 @router.get("/ui/images/{name}", include_in_schema=False)
 async def ui_image_file(req: Request, name: str):
     _require_ui_access(req)
+    _require_user(req)
 
     if not _SAFE_FILE_RE.match(name or ""):
         raise HTTPException(status_code=404, detail="not found")
@@ -370,6 +514,7 @@ async def ui_image_file(req: Request, name: str):
 @router.get("/ui/api/models", include_in_schema=False)
 async def ui_models(req: Request) -> Dict[str, Any]:
     _require_ui_access(req)
+    _require_user(req)
 
     now = now_unix()
     data: Dict[str, Any] = {"object": "list", "data": []}
@@ -424,6 +569,7 @@ async def ui_models(req: Request) -> Dict[str, Any]:
 @router.post("/ui/api/chat", include_in_schema=False)
 async def ui_chat(req: Request) -> Dict[str, Any]:
     _require_ui_access(req)
+    _require_user(req)
     body = await req.json()
     model = (body.get("model") or "fast").strip()
     message = (body.get("message") or "").strip()
@@ -501,6 +647,30 @@ def _conversation_to_chat_messages(convo: ui_conversations.Conversation) -> list
             continue
         role = str(item.get("role") or "").strip() or "user"
         # Skip non-text assistant artifacts from the prompt context.
+        if str(item.get("type") or "") == "image":
+            continue
+        content = item.get("content")
+        if not isinstance(content, str):
+            continue
+        msgs.append(ChatMessage(role=role, content=content))
+
+    return msgs
+
+
+def _conversation_payload_to_chat_messages(convo: Dict[str, Any]) -> list[ChatMessage]:
+    msgs: list[ChatMessage] = []
+    summary = str(convo.get("summary") or "").strip()
+    if summary:
+        msgs.append(ChatMessage(role="system", content=f"Conversation summary:\n{summary}"))
+
+    raw_messages = convo.get("messages")
+    if not isinstance(raw_messages, list):
+        return msgs
+
+    for item in raw_messages:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role") or "").strip() or "user"
         if str(item.get("type") or "") == "image":
             continue
         content = item.get("content")
@@ -617,6 +787,7 @@ async def ui_chat_stream(req: Request):
     """
 
     _require_ui_access(req)
+    _require_user(req)
     body = await req.json()
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="body must be an object")
@@ -627,24 +798,41 @@ async def ui_chat_stream(req: Request):
 
     # Prefer server-side conversation history if a conversation_id is provided.
     if conversation_id:
-        convo = ui_conversations.load(conversation_id)
-        if convo is None:
-            raise HTTPException(status_code=404, detail="conversation not found")
+        if user is None:
+            convo = ui_conversations.load(conversation_id)
+            if convo is None:
+                raise HTTPException(status_code=404, detail="conversation not found")
 
-        if isinstance(message_text, str) and message_text.strip():
+            if isinstance(message_text, str) and message_text.strip():
+                try:
+                    ui_conversations.append_message(conversation_id, {"role": "user", "content": message_text.strip()})
+                    convo = ui_conversations.load(conversation_id) or convo
+                except Exception:
+                    pass
+
+            # Best-effort summarization/pruning.
             try:
-                ui_conversations.append_message(conversation_id, {"role": "user", "content": message_text.strip()})
-                convo = ui_conversations.load(conversation_id) or convo
+                convo = await _summarize_if_needed(convo)
             except Exception:
                 pass
 
-        # Best-effort summarization/pruning.
-        try:
-            convo = await _summarize_if_needed(convo)
-        except Exception:
-            pass
-
-        messages = _conversation_to_chat_messages(convo)
+            messages = _conversation_to_chat_messages(convo)
+        else:
+            convo = user_store.get_conversation(S.USER_DB_PATH, user_id=user.id, conversation_id=conversation_id)
+            if convo is None:
+                raise HTTPException(status_code=404, detail="conversation not found")
+            if isinstance(message_text, str) and message_text.strip():
+                try:
+                    user_store.append_message(
+                        S.USER_DB_PATH,
+                        user_id=user.id,
+                        conversation_id=conversation_id,
+                        msg={"role": "user", "content": message_text.strip()},
+                    )
+                    convo = user_store.get_conversation(S.USER_DB_PATH, user_id=user.id, conversation_id=conversation_id) or convo
+                except Exception:
+                    pass
+            messages = _conversation_payload_to_chat_messages(convo)
     else:
         messages = _coerce_messages(body)
 
@@ -730,16 +918,30 @@ async def ui_chat_stream(req: Request):
         # Persist assistant message if we have a server-side conversation.
         if conversation_id:
             try:
-                ui_conversations.append_message(
-                    conversation_id,
-                    {
-                        "role": "assistant",
-                        "content": full_text,
-                        "backend": backend,
-                        "model": upstream_model,
-                        "reason": route.reason,
-                    },
-                )
+                if user is None:
+                    ui_conversations.append_message(
+                        conversation_id,
+                        {
+                            "role": "assistant",
+                            "content": full_text,
+                            "backend": backend,
+                            "model": upstream_model,
+                            "reason": route.reason,
+                        },
+                    )
+                else:
+                    user_store.append_message(
+                        S.USER_DB_PATH,
+                        user_id=user.id,
+                        conversation_id=conversation_id,
+                        msg={
+                            "role": "assistant",
+                            "content": full_text,
+                            "backend": backend,
+                            "model": upstream_model,
+                            "reason": route.reason,
+                        },
+                    )
             except Exception:
                 pass
 
@@ -756,6 +958,7 @@ async def ui_chat_stream(req: Request):
 @router.post("/ui/api/image", include_in_schema=False)
 async def ui_image(req: Request) -> Dict[str, Any]:
     _require_ui_access(req)
+    _require_user(req)
     body = await req.json()
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="body must be an object")
