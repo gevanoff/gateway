@@ -38,26 +38,18 @@
     bar.appendChild(inner);
     const txt = document.createElement('div');
     txt.className = 'progress-text';
-    txt.textContent = '0%';
+    txt.textContent = 'Processing...';
     wrap.appendChild(bar);
     wrap.appendChild(txt);
     return {wrap, inner, txt};
   }
 
   function _startUiProgress(inner, txt) {
-    let pct = 0;
-    txt.textContent = '0%';
-    const id = setInterval(() => {
-      const step = Math.max(1, Math.floor((100 - pct) / 18));
-      pct = Math.min(95, pct + step);
-      inner.style.width = pct + '%';
-      txt.textContent = pct + '%';
-    }, 300);
+    inner.classList.add('indeterminate');
+    txt.textContent = 'Processing...';
     return () => {
-      clearInterval(id);
-      inner.style.width = '100%';
-      txt.textContent = '100%';
-      setTimeout(() => { try { inner.style.width = '0%'; txt.textContent = ''; } catch (e) {} }, 300);
+      inner.classList.remove('indeterminate');
+      txt.textContent = '';
     };
   }
 
@@ -120,15 +112,86 @@
 
     const div = document.createElement("div");
     div.className = "thumb";
+    const wrapper = document.createElement("div");
+    wrapper.className = "audio-card";
+
+    const audio = document.createElement("audio");
+    audio.src = url;
+    audio.preload = "metadata";
+
+    const controls = document.createElement("div");
+    controls.className = "audio-controls";
+
+    const meta = document.createElement("div");
+    meta.className = "audio-meta";
+    const currentEl = document.createElement("span");
+    currentEl.textContent = "0:00";
+    const totalEl = document.createElement("span");
+    totalEl.textContent = "0:00";
+    meta.appendChild(currentEl);
+    meta.appendChild(totalEl);
+
+    const sliders = document.createElement("div");
+    sliders.className = "audio-sliders";
+    const seek = document.createElement("input");
+    seek.type = "range";
+    seek.min = "0";
+    seek.max = "0";
+    seek.value = "0";
+    seek.step = "0.01";
+    const volume = document.createElement("input");
+    volume.type = "range";
+    volume.min = "0";
+    volume.max = "1";
+    volume.step = "0.01";
+    volume.value = String(audio.volume);
+    volume.title = "Volume";
+    sliders.appendChild(seek);
+    sliders.appendChild(volume);
+
+    controls.appendChild(meta);
+    controls.appendChild(sliders);
+
+    const links = document.createElement("div");
+    links.style.display = "flex";
+    links.style.gap = "12px";
+    links.style.justifyContent = "flex-end";
+    links.innerHTML = `
+      <a href="${url}" target="_blank" rel="noreferrer">Open</a>
+      <a href="#" data-copy="${url}">Copy URL</a>
     div.innerHTML = `
-      <div style="display:flex; gap:8px; align-items:center; justify-content:space-between;">
-        <div style="flex:1 1 60%"><audio controls src="${url}"></audio></div>
-        <div style="display:flex; gap:8px; flex-direction:column; align-items:flex-end;">
+      <div style="display:flex; flex-direction:column; gap:10px;">
+        <audio controls src="${url}"></audio>
+        <div style="display:flex; gap:12px; justify-content:flex-end;">
           <a href="${url}" target="_blank" rel="noreferrer">Open</a>
           <a href="#" data-copy="${url}">Copy URL</a>
         </div>
       </div>
     `;
+
+    wrapper.appendChild(audio);
+    wrapper.appendChild(controls);
+    wrapper.appendChild(links);
+    div.appendChild(wrapper);
+
+    audio.addEventListener("loadedmetadata", () => {
+      if (Number.isFinite(audio.duration)) {
+        seek.max = String(audio.duration);
+        totalEl.textContent = formatTime(audio.duration);
+      }
+    });
+    audio.addEventListener("timeupdate", () => {
+      currentEl.textContent = formatTime(audio.currentTime);
+      if (!seek.matches(":active")) {
+        seek.value = String(audio.currentTime);
+      }
+    });
+    seek.addEventListener("input", () => {
+      audio.currentTime = Number(seek.value);
+    });
+    volume.addEventListener("input", () => {
+      audio.volume = Number(volume.value);
+    });
 
     div.addEventListener("click", (e) => {
       const a = e.target;
@@ -141,6 +204,13 @@
     });
 
     galleryEl.appendChild(div);
+  }
+
+  function formatTime(seconds) {
+    const total = Number.isFinite(seconds) ? Math.max(0, seconds) : 0;
+    const mins = Math.floor(total / 60);
+    const secs = Math.floor(total % 60);
+    return `${mins}:${secs.toString().padStart(2, "0")}`;
   }
 
   function readQueryPrefill() {

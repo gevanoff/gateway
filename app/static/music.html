@@ -29,11 +29,29 @@
       .out { margin-top: 12px; }
       .gallery { display:grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
       .thumb { border: 1px solid rgba(231,237,246,0.12); background: #0e1217; border-radius: 12px; padding: 10px; }
-      audio { width: 100%; display: block; margin-top: 8px; }
+      .audio-card { display:flex; flex-direction:column; gap:10px; width: 100%; }
+      .audio-controls { display:flex; flex-direction:column; gap:6px; }
+      .audio-meta { display:flex; justify-content:space-between; font-size: 12px; color: #a9b4c3; }
+      .audio-sliders { display:flex; gap:10px; align-items:center; }
+      .audio-sliders input[type="range"] { flex: 1; }
       pre { margin: 0; white-space: pre-wrap; word-break: break-word; font-size: 12px; color: #c6d2e4; }
 
       .pill { display:inline-flex; gap:8px; align-items:center; padding: 6px 10px; border: 1px solid rgba(231,237,246,0.12); border-radius: 999px; background: rgba(231,237,246,0.03); }
       .error { color: #ffb4b4; }
+      fieldset { border: 1px solid rgba(231,237,246,0.12); border-radius: 12px; padding: 12px; }
+      legend { padding: 0 8px; font-size: 12px; color: #a9b4c3; }
+
+      .progress {
+        width: 100%; background: rgba(231,237,246,0.06); border-radius: 8px; height: 10px; overflow: hidden; margin-top: 8px;
+      }
+      .progress-inner { height: 10px; background: linear-gradient(90deg,#6fb8ff,#8be3c9); width: 100%; }
+      .progress-inner.indeterminate { animation: progress-slide 1.2s ease-in-out infinite; transform-origin: left; }
+      .progress-text { font-size: 12px; color: #a9b4c3; margin-top: 6px; }
+      @keyframes progress-slide {
+        0% { transform: translateX(-70%); }
+        50% { transform: translateX(0%); }
+        100% { transform: translateX(70%); }
+      }
     </style>
   </head>
   <body>
@@ -66,6 +84,7 @@
           <label>
             <span>Duration (sec)</span>
             <input id="duration" type="number" min="1" max="180" step="1" value="15" />
+            <span class="hint">Range: 1-180</span>
           </label>
 
           <label style="min-width: 240px; flex: 1 1 240px;">
@@ -78,32 +97,43 @@
 
         <details style="margin-top: 12px;">
           <summary>Advanced options</summary>
-          <div class="row" style="margin-top:10px">
-            <label>
-              <span title="Creativity Level (0.0-2.0): Low (0.0-0.5)=predictable/safe, Medium (0.7-1.0)=balanced, High (1.5-2.0)=experimental/wild">Creativity</span>
-              <input id="temperature" type="number" min="0" max="2" step="0.01" placeholder="0.8" />
+          <fieldset style="margin-top:10px">
+            <legend>Creative controls (with ranges)</legend>
+            <div class="row" style="margin-top:6px">
+              <label>
+                <span title="Creativity Level (0.0-2.0): Low (0.0-0.5)=predictable/safe, Medium (0.7-1.0)=balanced, High (1.5-2.0)=experimental/wild">Creativity</span>
+                <input id="temperature" type="number" min="0" max="2" step="0.01" placeholder="0.8" />
+                <span class="hint">Range: 0.0-2.0</span>
+              </label>
+
+              <label>
+                <span title="Focus Range (0.0-1.0): Low (0.1-0.5)=narrow focus on most likely elements, High (0.9-1.0)=broad inclusion of diverse options">Focus</span>
+                <input id="top_p" type="number" min="0" max="1" step="0.01" placeholder="0.95" />
+                <span class="hint">Range: 0.0-1.0</span>
+              </label>
+
+              <label>
+                <span title="Choice Limit (0-100): Low (1-10)=very restrictive/predictable, Medium (20-50)=balanced variety, High (50+)=maximum creativity">Choices</span>
+                <input id="top_k" type="number" min="0" max="100" step="1" placeholder="0" />
+                <span class="hint">Range: 0-100</span>
+              </label>
+            </div>
+          </fieldset>
+
+          <fieldset style="margin-top:10px">
+            <legend>Metadata</legend>
+            <label style="margin-top:6px">
+              <span>Tags (comma)</span>
+              <input id="tags" placeholder="electronic,dance" />
+              <span class="hint">Example: ambient,lofi,cinematic</span>
             </label>
 
-            <label>
-              <span title="Focus Range (0.0-1.0): Low (0.1-0.5)=narrow focus on most likely elements, High (0.9-1.0)=broad inclusion of diverse options">Focus</span>
-              <input id="top_p" type="number" min="0" max="1" step="0.01" placeholder="0.95" />
+            <label style="margin-top:10px">
+              <span>Extra JSON (optional)</span>
+              <textarea id="extra" placeholder='{"seed": 1234}'></textarea>
+              <span class="hint">Provide additional backend-specific fields.</span>
             </label>
-
-            <label>
-              <span title="Choice Limit (0-100): Low (1-10)=very restrictive/predictable, Medium (20-50)=balanced variety, High (50+)=maximum creativity">Choices</span>
-              <input id="top_k" type="number" min="0" max="100" step="1" placeholder="0" />
-            </label>
-          </div>
-
-          <label style="margin-top:10px">
-            <span>Tags (comma)</span>
-            <input id="tags" placeholder="electronic,dance" />
-          </label>
-
-          <label style="margin-top:10px">
-            <span>Extra JSON (optional)</span>
-            <textarea id="extra" placeholder='{"seed": 1234}'></textarea>
-          </label>
+          </fieldset>
         </details>
 
         <div class="out">

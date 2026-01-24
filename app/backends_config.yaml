@@ -83,6 +83,19 @@ backends:
       readiness: /readyz
     payload_policy: {}
 
+  pocket_tts:
+    class: pocket_tts
+    base_url: http://ai2:9940
+    description: Pocket TTS backend
+    supported_capabilities:
+      - tts
+    concurrency_limits:
+      tts: 4
+    health:
+      liveness: /healthz
+      readiness: /readyz
+    payload_policy: {}
+
 # Legacy backend names map to backend classes
 legacy_mapping:
   mlx: local_mlx

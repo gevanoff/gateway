@@ -92,6 +92,13 @@ class Settings(BaseSettings):
     # This ties into backends_config.yaml (capability: music).
     MUSIC_BACKEND_CLASS: str = "heartmula_music"
 
+    # Text-to-speech (Pocket TTS)
+    # Default path mirrors OpenAI-style POST /v1/audio/speech; override if needed.
+    TTS_BASE_URL: str = ""
+    TTS_TIMEOUT_SEC: float = 60.0
+    TTS_GENERATE_PATH: str = "/v1/audio/speech"
+    TTS_BACKEND_CLASS: str = "pocket_tts"
+
     DEFAULT_BACKEND: Literal["ollama", "mlx"] = "ollama"
 
     # Backends can each have "strong" and "fast" model choices.

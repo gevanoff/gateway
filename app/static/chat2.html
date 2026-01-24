@@ -16,25 +16,37 @@
       select, input, textarea { box-sizing: border-box; padding: 10px; border-radius: 10px; border: 1px solid rgba(231,237,246,0.12); background: #12161c; color: #e7edf6; }
       button { padding: 10px 12px; border-radius: 10px; border: 1px solid rgba(231,237,246,0.14); background: #12161c; color: #e7edf6; cursor: pointer; }
       button:disabled { opacity: 0.6; cursor: default; }
-      .chat { border: 1px solid rgba(231,237,246,0.12); background: #0e1217; border-radius: 12px; padding: 12px; min-height: 340px; max-height: 60vh; overflow-y: auto; }
+      .chat { border: 1px solid rgba(231,237,246,0.12); background: #0e1217; border-radius: 12px; padding: 12px; min-height: 340px; height: 60vh; overflow-y: auto; }
       .msg { display:flex; flex-direction:column; gap:6px; padding: 10px; border-radius: 12px; margin: 10px 0; border: 1px solid rgba(231,237,246,0.10); }
       .msg.user { background: rgba(50, 110, 255, 0.10); }
       .msg.assistant { background: rgba(231,237,246,0.06); }
       .msg.system { background: rgba(255, 200, 50, 0.08); }
       .meta { font-size: 12px; color: #a9b4c3; }
       .content { white-space: pre-wrap; line-height: 1.5; }
-      .thinking { font-size: 12px; color: #93a4ba; font-style: italic; }
+      .thinking-line { font-size: 12px; color: #93a4ba; font-style: italic; margin-bottom: 6px; }
       .composer { margin-top: 12px; display:flex; gap:10px; }
       .composer textarea { flex: 1; min-height: 64px; resize: vertical; }
       .right { display:flex; flex-direction:column; gap:10px; }
       .pill { display:inline-flex; gap:8px; align-items:center; padding: 6px 10px; border: 1px solid rgba(231,237,246,0.12); border-radius: 999px; background: rgba(231,237,246,0.03); }
       img.gen { max-width: 100%; height: auto; display: block; border-radius: 12px; border: 1px solid rgba(231,237,246,0.12); }
+      .audio-card { display:flex; flex-direction:column; gap:10px; width: 100%; max-width: 640px; }
+      .audio-controls { display:flex; flex-direction:column; gap:6px; }
+      .audio-meta { display:flex; justify-content:space-between; font-size: 12px; color: #a9b4c3; }
+      .audio-sliders { display:flex; gap:10px; align-items:center; }
+      .audio-sliders input[type="range"] { flex: 1; }
+      .msg audio { width: 100%; max-width: 520px; }
       /* Progress bar */
       .progress {
         width: 100%; background: rgba(231,237,246,0.06); border-radius: 8px; height: 10px; overflow: hidden; margin-top: 8px;
       }
-      .progress-inner { height: 10px; background: linear-gradient(90deg,#6fb8ff,#8be3c9); width: 0%; transition: width 0.2s linear; }
+      .progress-inner { height: 10px; background: linear-gradient(90deg,#6fb8ff,#8be3c9); width: 100%; }
+      .progress-inner.indeterminate { animation: progress-slide 1.2s ease-in-out infinite; transform-origin: left; }
       .progress-text { font-size: 12px; color: #a9b4c3; margin-top: 6px; }
+      @keyframes progress-slide {
+        0% { transform: translateX(-70%); }
+        50% { transform: translateX(0%); }
+        100% { transform: translateX(70%); }
+      }
       @media (max-width: 760px) { .composer { flex-direction: column; } }
     </style>
   </head>
@@ -61,6 +73,8 @@
           </label>
           <a class="pill" href="/ui/image">Image UI</a>
           <a class="pill" href="/ui/music">Music UI</a>
+          <a class="pill" href="/ui/video">Video UI</a>
+          <a class="pill" href="/ui/tts">Text-to-speech</a>
           <button id="clear" type="button">Clear</button>
         </div>
       </header>
