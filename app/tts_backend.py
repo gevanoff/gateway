@@ -50,6 +50,9 @@ def _normalize_payload(body: Dict[str, Any]) -> Dict[str, Any]:
     if "text" not in payload and isinstance(payload.get("input"), str):
         payload["text"] = payload.get("input")
 
+    if "input" not in payload and isinstance(payload.get("text"), str):
+        payload["input"] = payload.get("text")
+
     if "voice" in payload and payload["voice"] is not None:
         payload["voice"] = str(payload["voice"]).strip()
         if not payload["voice"]:
