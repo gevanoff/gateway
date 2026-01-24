@@ -72,7 +72,7 @@ async def _handle_tts(req: Request) -> StreamingResponse | JSONResponse:
     if result.audio is None:
         raise HTTPException(status_code=502, detail="tts backend returned no audio")
 
-    return StreamingResponse(io.BytesIO(result.audio), media_type=result.content_type, headers=headers)
+    return StreamingResponse(result.audio, media_type=result.content_type, headers=headers)
 
 
 @router.post("/v1/tts/generations")
