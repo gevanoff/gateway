@@ -660,3 +660,49 @@ async def responses(req: Request):
     resp.headers["X-Model-Used"] = model_name
     resp.headers["X-Router-Reason"] = route.reason
     return resp
+
+
+@router.post("/v1/audio/speech")
+async def speech(req: Request):
+    """Text-to-speech endpoint - proxy to pocket-tts backend."""
+    require_bearer(req)
+    
+    # Get pocket-tts base URL from env or default
+    pocket_tts_base = os.environ.get("POCKET_TTS_BASE_URL", "http://127.0.0.1:9940")
+    
+    body = await req.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="body must be an object")
+    
+    # Transform UI request format to OpenAI format
+    # UI sends: {"text": "...", "speed": 1.0}
+    # OpenAI expects: {"input": "...", "model": "...", "voice": "...", "response_format": "..."}
+    transformed_body = {
+        "input": body.get("text", ""),
+        "model": body.get("model", "pocket-tts"),
+        "voice": body.get("voice"),
+        "response_format": body.get("response_format", "wav"),
+    }
+    # Remove None values
+    transformed_body = {k: v for k, v in transformed_body.items() if v is not None}
+    
+    timeout = httpx.Timeout(30.0)  # TTS can take time
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        try:
+            r = await client.post(
+                f"{pocket_tts_base}/v1/audio/speech",
+                json=transformed_body,
+                headers={"Authorization": req.headers.get("authorization", "")}
+            )
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"tts backend failed: pocket-tts {e}")
+    
+    if r.status_code != 200:
+        try:
+            error_detail = r.json()
+        except Exception:
+            error_detail = r.text
+        raise HTTPException(status_code=502, detail=f"tts backend failed: pocket-tts HTTP {r.status_code}: {error_detail}")
+    
+    # Return the audio response
+    return StreamingResponse(r.aiter_bytes(), media_type=r.headers.get("content-type", "audio/wav"))
