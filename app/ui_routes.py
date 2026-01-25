@@ -969,29 +969,6 @@ async def ui_chat_stream(req: Request):
                         full_text += text
                         yield sse({"type": "delta", "delta": text})
 
-            # Persist assistant message if we have a server-side conversation.
-            if conversation_id:
-                try:
-                    ui_conversations.append_message(
-                        conversation_id,
-                        {
-                            "role": "assistant",
-                            "content": full_text,
-                            "backend": backend,
-                            "model": upstream_model,
-                            "reason": route.reason,
-                        },
-                    )
-                except Exception:
-                    text = None
-                    thinking = None
-
-                if isinstance(thinking, str) and thinking:
-                    yield sse({"type": "thinking", "thinking": thinking})
-
-                if isinstance(text, str) and text:
-                    full_text += text
-                    yield sse({"type": "delta", "delta": text})
 
         # Persist assistant message if we have a server-side conversation.
         if conversation_id:
