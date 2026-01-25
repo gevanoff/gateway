@@ -931,6 +931,7 @@ async def ui_chat_stream(req: Request):
 
     async def gen():
         try:
+            # Announce routing info first
             yield sse({"type": "route", "backend": backend, "model": upstream_model, "reason": route.reason})
 
             full_text = ""
@@ -969,37 +970,38 @@ async def ui_chat_stream(req: Request):
                         full_text += text
                         yield sse({"type": "delta", "delta": text})
 
+            # After streaming completes, persist assistant message (if any)
+            if conversation_id:
+                try:
+                    if user is None:
+                        ui_conversations.append_message(
+                            conversation_id,
+                            {
+                                "role": "assistant",
+                                "content": full_text,
+                                "backend": backend,
+                                "model": upstream_model,
+                                "reason": route.reason,
+                            },
+                        )
+                    else:
+                        user_store.append_message(
+                            S.USER_DB_PATH,
+                            user_id=user.id,
+                            conversation_id=conversation_id,
+                            msg={
+                                "role": "assistant",
+                                "content": full_text,
+                                "backend": backend,
+                                "model": upstream_model,
+                                "reason": route.reason,
+                            },
+                        )
+                except Exception:
+                    # Best-effort persistence; do not fail the stream on storage errors.
+                    pass
 
-        # Persist assistant message if we have a server-side conversation.
-        if conversation_id:
-            try:
-                if user is None:
-                    ui_conversations.append_message(
-                        conversation_id,
-                        {
-                            "role": "assistant",
-                            "content": full_text,
-                            "backend": backend,
-                            "model": upstream_model,
-                            "reason": route.reason,
-                        },
-                    )
-                else:
-                    user_store.append_message(
-                        S.USER_DB_PATH,
-                        user_id=user.id,
-                        conversation_id=conversation_id,
-                        msg={
-                            "role": "assistant",
-                            "content": full_text,
-                            "backend": backend,
-                            "model": upstream_model,
-                            "reason": route.reason,
-                        },
-                    )
-            except Exception:
-                pass
-
+            # Signal completion to the UI
             yield sse({"type": "done"})
             yield sse_done()
         finally:
