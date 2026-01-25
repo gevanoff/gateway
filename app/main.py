@@ -236,6 +236,8 @@ app.include_router(health_router)
 app.include_router(openai_router)
 app.include_router(images_router)
 app.include_router(music_router)
+from app.tts_routes import router as tts_router
+app.include_router(tts_router)
 # Proxy audio from HeartMula through the gateway (e.g., /ui/heartmula/audio/{filename})
 from app.audio_routes import router as audio_router
 app.include_router(audio_router)
