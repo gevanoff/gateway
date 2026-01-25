@@ -110,6 +110,16 @@ that explicitly allowlists the `heartmula_generate` tool.
 
 UI: the gateway exposes a tokenless, IP-restricted music playground at `/ui/music` (gated by `UI_IP_ALLOWLIST`) that calls `/ui/api/music` and proxies audio via `/ui/heartmula/audio/{filename}`.
 
+## User accounts
+
+Gateway UI endpoints can optionally require per-user login, with user settings and chat histories stored in SQLite (`USER_DB_PATH`). Account creation and password resets are handled by a local script:
+
+- Create user: `python tools/manage_users.py create <username>`
+- Reset password: `python tools/manage_users.py reset <username>`
+- Disable/enable: `python tools/manage_users.py disable <username>` / `python tools/manage_users.py enable <username>`
+
+When `USER_AUTH_ENABLED=true`, UI API calls require a session created via `POST /ui/api/auth/login` and will store user-specific settings (`/ui/api/user/settings`) and conversation history (`/ui/api/conversations/*`) in the backing database.
+
 Endpoints (bearer-protected):
 
 - `POST /v1/agent/run`
