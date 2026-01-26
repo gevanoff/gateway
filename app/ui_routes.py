@@ -520,7 +520,18 @@ async def ui_conversation_get(req: Request, conversation_id: str) -> Dict[str, A
     if user is None:
         convo = ui_conversations.load(conversation_id)
         if convo is None:
-            raise HTTPException(status_code=404, detail="not found")
+            # If the client provided a syntactically safe conversation id (e.g. from
+            # localStorage) but the server has no record (e.g. after a cleanup or
+            # deploy), create a new empty conversation using the same id so the
+            # UI can continue using its stored id rather than receiving a 404.
+            if not ui_conversations._is_safe_id(conversation_id):
+                raise HTTPException(status_code=404, detail="not found")
+            now = int(time.time())
+            try:
+                convo = ui_conversations.Conversation(id=conversation_id, created=now, updated=now, summary="", messages=[])
+                ui_conversations.save(convo)
+            except Exception:
+                raise HTTPException(status_code=500, detail="failed to create conversation")
         return convo.to_dict()
     convo = user_store.get_conversation(S.USER_DB_PATH, user_id=user.id, conversation_id=conversation_id)
     if convo is None:
@@ -907,7 +918,18 @@ async def ui_chat_stream(req: Request):
         if user is None:
             convo = ui_conversations.load(conversation_id)
             if convo is None:
-                raise HTTPException(status_code=404, detail="conversation not found")
+                # If the client sent a safe but unknown conversation id (for
+                # example left in localStorage from before a cleanup), create
+                # an empty conversation using the same id so the UI can keep
+                # using its stored id instead of getting a 404.
+                if not ui_conversations._is_safe_id(conversation_id):
+                    raise HTTPException(status_code=404, detail="conversation not found")
+                now = int(time.time())
+                try:
+                    convo = ui_conversations.Conversation(id=conversation_id, created=now, updated=now, summary="", messages=[])
+                    ui_conversations.save(convo)
+                except Exception:
+                    raise HTTPException(status_code=500, detail="conversation not found")
 
             if isinstance(message_text, str) and message_text.strip():
                 try:
