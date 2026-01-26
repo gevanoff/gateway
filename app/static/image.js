@@ -198,6 +198,7 @@
 
       const resp = await fetch("/ui/api/image", {
         method: "POST",
+        credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });

@@ -265,6 +265,7 @@
 
       const resp = await fetch("/ui/api/music", {
         method: "POST",
+        credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });

@@ -189,6 +189,7 @@
     try {
       const resp = await fetch("/ui/api/tts", {
         method: "POST",
+        credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });

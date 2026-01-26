@@ -309,7 +309,7 @@
 
     async function loadModels() {
       try {
-        const resp = await fetch("/ui/api/models", { method: "GET" });
+        const resp = await fetch("/ui/api/models", { method: "GET", credentials: "same-origin" });
         const text = await resp.text();
         if (handle401(resp)) return;
         if (!resp.ok) {
@@ -343,7 +343,7 @@
         return;
       }
 
-      const resp = await fetch("/ui/api/conversations/new", { method: "POST" });
+      const resp = await fetch("/ui/api/conversations/new", { method: "POST", credentials: "same-origin" });
       const text = await resp.text();
       if (handle401(resp)) return;
       if (!resp.ok) {
@@ -368,7 +368,7 @@
 
     async function loadConversation() {
       if (!conversationId) return;
-      const resp = await fetch(`/ui/api/conversations/${encodeURIComponent(conversationId)}`, { method: "GET" });
+      const resp = await fetch(`/ui/api/conversations/${encodeURIComponent(conversationId)}`, { method: "GET", credentials: "same-origin" });
       const text = await resp.text();
       if (handle401(resp)) return;
       if (!resp.ok) {
@@ -393,6 +393,7 @@
       if (!conversationId) return;
       await fetch(`/ui/api/conversations/${encodeURIComponent(conversationId)}/append`, {
         method: "POST",
+        credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message }),
       });
@@ -453,6 +454,7 @@
       try {
         const resp = await fetch("/ui/api/chat_stream", {
           method: "POST",
+          credentials: "same-origin",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ model, conversation_id: conversationId, message: userText }),
         });
@@ -596,7 +598,7 @@
 
     async function generateMusic(body) {
       try {
-        const resp = await fetch("/ui/api/music", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+        const resp = await fetch("/ui/api/music", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
         const text = await resp.text();
         if (handle401(resp)) return;
         if (!resp.ok) {
@@ -617,7 +619,7 @@
     async function generateImage(prompt, image_request) {
       const body = { prompt, ...image_request };
       try {
-        const resp = await fetch("/ui/api/image", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+        const resp = await fetch("/ui/api/image", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
         const text = await resp.text();
         if (handle401(resp)) return;
         if (!resp.ok) {
