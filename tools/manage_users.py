@@ -76,6 +76,11 @@ def main() -> int:
 
     args = parser.parse_args()
     try:
+        user_store.init_db(S.USER_DB_PATH)
+    except Exception as exc:
+        print(f"error: failed to init user db ({type(exc).__name__}: {exc})", file=sys.stderr)
+        return 1
+    try:
         return args.func(args)
     except Exception as exc:
         print(f"error: {exc}", file=sys.stderr)
