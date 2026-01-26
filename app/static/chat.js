@@ -9,6 +9,18 @@
   const outEl = $("out");
   const metaEl = $("meta");
 
+  function setOutput(text) {
+    try {
+      if (outEl) outEl.textContent = String(text || "");
+    } catch (e) {}
+  }
+
+  function setMeta(text) {
+    try {
+      if (metaEl) metaEl.textContent = String(text || "");
+    } catch (e) {}
+  }
+
   const imgPromptEl = $("imgPrompt");
   (() => {
     const $ = (id) => document.getElementById(id);
