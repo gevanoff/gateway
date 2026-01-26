@@ -324,29 +324,6 @@ async def ui_slash(req: Request) -> HTMLResponse:
     return await ui(req)
 
 
-@router.get("/ui1", include_in_schema=False)
-async def ui1(req: Request) -> HTMLResponse:
-    _require_ui_access(req)
-    html_path = Path(__file__).with_name("static").joinpath("chat.html")
-    return HTMLResponse(html_path.read_text(encoding="utf-8"))
-
-
-@router.get("/ui1/", include_in_schema=False)
-async def ui1_slash(req: Request) -> HTMLResponse:
-    return await ui1(req)
-
-
-@router.get("/ui2", include_in_schema=False)
-async def ui2(req: Request) -> HTMLResponse:
-    _require_ui_access(req)
-    html_path = Path(__file__).with_name("static").joinpath("chat2.html")
-    return HTMLResponse(html_path.read_text(encoding="utf-8"))
-
-
-@router.get("/ui2/", include_in_schema=False)
-async def ui2_slash(req: Request) -> HTMLResponse:
-    return await ui2(req)
-
 
 @router.get("/ui/image", include_in_schema=False)
 async def ui_image_frontend(req: Request) -> HTMLResponse:

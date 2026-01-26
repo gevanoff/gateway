@@ -10,353 +10,650 @@
   const metaEl = $("meta");
 
   const imgPromptEl = $("imgPrompt");
-  const imgSizeEl = $("imgSize");
-  const imgStepsEl = $("imgSteps");
-  const imgSeedEl = $("imgSeed");
-  const imgAutoGuidanceEl = $("imgAutoGuidance");
-  const imgNegEl = $("imgNeg");
-  const imgGenerateEl = $("imgGenerate");
-  const imgClearEl = $("imgClear");
-  const imgOutEl = $("imgOut");
-  const imgMetaEl = $("imgMeta");
+  (() => {
+    const $ = (id) => document.getElementById(id);
 
-  function setBusy(busy) {
-    sendEl.disabled = busy;
-  }
+    const chatEl = $("chat");
+    const modelEl = $("model");
+    const loadModelsEl = $("loadModels");
+    const inputEl = $("input");
+    const sendEl = $("send");
+    const clearEl = $("clear");
+    const autoImageEl = $("autoImage");
 
-  function setOutput(text) {
-    outEl.textContent = text || "";
-  }
+    /** @type {{role:'user'|'assistant'|'system', content:string}[]} */
+    let history = [];
 
-  function setMeta(text) {
-    metaEl.textContent = text || "";
-  }
+    const CONVO_KEY = "gw_ui2_conversation_id";
+    const AUTO_IMAGE_KEY = "gw_ui2_auto_image";
+    let conversationId = "";
 
-  function setImgOutputHtml(html) {
-    imgOutEl.innerHTML = html || "";
-  }
-
-  function setImgMeta(text) {
-    imgMetaEl.textContent = text || "";
-  }
-
-  function _setModelOptions(modelIds, preferred) {
-    const prev = modelEl.value;
-    modelEl.innerHTML = "";
-
-    const ids = Array.isArray(modelIds) ? modelIds.filter((x) => typeof x === "string" && x.trim()) : [];
-    const unique = Array.from(new Set(ids));
-    unique.sort((a, b) => a.localeCompare(b));
-
-    for (const id of unique) {
-      const opt = document.createElement("option");
-      opt.value = id;
-      opt.textContent = id;
-      modelEl.appendChild(opt);
+    function handle401(resp) {
+      if (resp && resp.status === 401) {
+        const back = encodeURIComponent(window.location.pathname + window.location.search);
+        window.location.href = `/ui/login?next=${back}`;
+        return true;
+      }
+      return false;
     }
 
-    const want = (preferred || "").trim();
-    if (want && unique.includes(want)) {
-      modelEl.value = want;
-      return;
+    function loadAutoImageSetting() {
+      if (!autoImageEl) return;
+      const raw = (localStorage.getItem(AUTO_IMAGE_KEY) || "").trim().toLowerCase();
+      if (raw === "1" || raw === "true" || raw === "yes" || raw === "on") {
+        autoImageEl.checked = true;
+        return;
+      }
+      if (raw === "0" || raw === "false" || raw === "no" || raw === "off") {
+        autoImageEl.checked = false;
+        return;
+      }
+      // Default: off (avoid accidental image generation).
+      autoImageEl.checked = false;
     }
-    if (prev && unique.includes(prev)) {
-      modelEl.value = prev;
-      return;
-    }
-    if (unique.includes("fast")) {
-      modelEl.value = "fast";
-      return;
-    }
-    if (unique.length) {
-      modelEl.value = unique[0];
-    }
-  }
 
-  let _modelsTimer = null;
-  function _scheduleLoadModels() {
-    if (_modelsTimer) {
-      clearTimeout(_modelsTimer);
-      _modelsTimer = null;
+    function saveAutoImageSetting() {
+      if (!autoImageEl) return;
+      localStorage.setItem(AUTO_IMAGE_KEY, autoImageEl.checked ? "1" : "0");
     }
-    _modelsTimer = setTimeout(() => {
-      _modelsTimer = null;
-      void loadModels();
-    }, 250);
-  }
 
-  async function loadModels() {
-    try {
-      setMeta("Loading models...");
-      const resp = await fetch("/ui/api/models", {
-        method: "GET",
-      });
-      const text = await resp.text();
-      if (!resp.ok) {
-        if (resp.status === 401) {
-          // Session missing or expired — send user to login UI
-          const back = encodeURIComponent(window.location.pathname + window.location.search);
-          window.location.href = `/ui/login?next=${back}`;
-          return;
+    function escapeHtml(s) {
+      return String(s)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+
+    function buildImageUiUrl({ prompt, image_request }) {
+      const qs = new URLSearchParams();
+      const p = typeof prompt === "string" ? prompt.trim() : "";
+      if (p) qs.set("prompt", p);
+
+      const req = image_request && typeof image_request === "object" ? image_request : {};
+      const add = (k, v) => {
+        if (v === undefined || v === null) return;
+        const s = String(v).trim();
+        if (!s) return;
+        qs.set(k, s);
+      };
+
+      add("size", req.size);
+      add("n", req.n);
+      add("model", req.model);
+      add("seed", req.seed);
+      add("steps", req.steps);
+      add("guidance_scale", req.guidance_scale);
+      add("negative_prompt", req.negative_prompt);
+
+      const q = qs.toString();
+      return q ? `/ui/image?${q}` : "/ui/image";
+    }
+
+    function scrollToBottom() {
+      if (!chatEl) return;
+      chatEl.scrollTop = chatEl.scrollHeight;
+    }
+
+    function addMessage({ role, content, meta, html }) {
+      if (!chatEl) return { wrap: null, metaEl: null, contentEl: null };
+      const wrap = document.createElement("div");
+      wrap.className = `msg ${role}`;
+
+      const metaEl = document.createElement("div");
+      metaEl.className = "meta";
+      metaEl.textContent = meta || (role === "user" ? "You" : role === "assistant" ? "Assistant" : "System");
+
+      const contentEl = document.createElement("div");
+      contentEl.className = "content";
+      if (html) {
+        contentEl.innerHTML = html;
+      } else {
+        contentEl.textContent = content || "";
+      }
+
+      wrap.appendChild(metaEl);
+      wrap.appendChild(contentEl);
+      chatEl.appendChild(wrap);
+      scrollToBottom();
+
+      return { wrap, metaEl, contentEl };
+    }
+
+    function formatTime(seconds) {
+      const total = Number.isFinite(seconds) ? Math.max(0, seconds) : 0;
+      const mins = Math.floor(total / 60);
+      const secs = Math.floor(total % 60);
+      return `${mins}:${secs.toString().padStart(2, "0")}`;
+    }
+
+    function createAudioPlayer(url) {
+      const wrap = document.createElement("div");
+      wrap.className = "audio-card";
+
+      const audio = document.createElement("audio");
+      audio.src = url;
+      audio.preload = "metadata";
+
+      const controls = document.createElement("div");
+      controls.className = "audio-controls";
+
+      const meta = document.createElement("div");
+      meta.className = "audio-meta";
+      const currentEl = document.createElement("span");
+      currentEl.textContent = "0:00";
+      const totalEl = document.createElement("span");
+      totalEl.textContent = "0:00";
+      meta.appendChild(currentEl);
+      meta.appendChild(totalEl);
+
+      const sliders = document.createElement("div");
+      sliders.className = "audio-sliders";
+
+      const seek = document.createElement("input");
+      seek.type = "range";
+      seek.min = "0";
+      seek.max = "0";
+      seek.value = "0";
+      seek.step = "0.01";
+
+      const volume = document.createElement("input");
+      volume.type = "range";
+      volume.min = "0";
+      volume.max = "1";
+      volume.step = "0.01";
+      volume.value = String(audio.volume);
+      volume.title = "Volume";
+
+      sliders.appendChild(seek);
+      sliders.appendChild(volume);
+
+      controls.appendChild(meta);
+      controls.appendChild(sliders);
+
+      wrap.appendChild(audio);
+      wrap.appendChild(controls);
+
+      audio.addEventListener("loadedmetadata", () => {
+        if (Number.isFinite(audio.duration)) {
+          seek.max = String(audio.duration);
+          totalEl.textContent = formatTime(audio.duration);
         }
-        _setModelOptions(["fast"], "fast");
-        setMeta(`Models: HTTP ${resp.status}`);
-        setOutput(text);
+      });
+
+      audio.addEventListener("timeupdate", () => {
+        currentEl.textContent = formatTime(audio.currentTime);
+        if (!seek.matches(":active")) {
+          seek.value = String(audio.currentTime);
+        }
+      });
+
+      seek.addEventListener("input", () => {
+        audio.currentTime = Number(seek.value);
+      });
+
+      volume.addEventListener("input", () => {
+        audio.volume = Number(volume.value);
+      });
+
+      return wrap;
+    }
+
+    function renderStoredMessage(m) {
+      if (!m || typeof m !== "object") return;
+      const role = typeof m.role === "string" ? m.role : "assistant";
+      const type = typeof m.type === "string" ? m.type : "";
+      const content = typeof m.content === "string" ? m.content : "";
+
+      if (type === "image" && typeof m.url === "string" && m.url.trim()) {
+        const metaBits = [];
+        if (m.backend) metaBits.push(`backend=${m.backend}`);
+        if (m.model) metaBits.push(`model=${m.model}`);
+        if (m.sha256) metaBits.push(`sha=${String(m.sha256).slice(0, 12)}`);
+
+        const link = buildImageUiUrl({ prompt: m.prompt, image_request: m.image_request });
+
+        addMessage({
+          role: role === "user" ? "user" : "assistant",
+          meta: metaBits.length ? `Image • ${metaBits.join(" • ")}` : "Image",
+          html: `<img class="gen" src="${escapeHtml(m.url.trim())}" alt="generated" />\n<div style="margin-top:8px"><a href="${escapeHtml(link)}">Open in Image UI</a></div>`,
+        });
         return;
       }
 
+      const metaBits = [];
+      if (m.backend) metaBits.push(`backend=${m.backend}`);
+      if (m.model) metaBits.push(`model=${m.model}`);
+      if (m.reason) metaBits.push(`reason=${m.reason}`);
+      addMessage({ role, content, meta: metaBits.length ? metaBits.join(" • ") : undefined });
+    }
+
+    function setBusy(busy) {
+      if (sendEl) sendEl.disabled = busy;
+      if (inputEl) inputEl.disabled = busy;
+      if (modelEl) modelEl.disabled = busy;
+      if (loadModelsEl) loadModelsEl.disabled = busy;
+    }
+
+    // Progress utilities for inline generation (simulated incremental progress)
+    function _createProgressEl() {
+      const wrap = document.createElement('div');
+      wrap.className = 'progress-wrapper';
+      const bar = document.createElement('div');
+      bar.className = 'progress';
+      const inner = document.createElement('div');
+      inner.className = 'progress-inner';
+      bar.appendChild(inner);
+      const txt = document.createElement('div');
+      txt.className = 'progress-text';
+      txt.textContent = 'Processing...';
+      wrap.appendChild(bar);
+      wrap.appendChild(txt);
+      return {wrap, inner, txt};
+    }
+
+    function _startProgress(inner, txt) {
+      inner.classList.add('indeterminate');
+      txt.textContent = 'Processing...';
+      return () => {
+        inner.classList.remove('indeterminate');
+        txt.textContent = '';
+      };
+    }
+
+    function _setModelOptions(modelIds, preferred) {
+      const prev = modelEl.value;
+      modelEl.innerHTML = "";
+
+      const ids = Array.isArray(modelIds) ? modelIds.filter((x) => typeof x === "string" && x.trim()) : [];
+      const unique = Array.from(new Set(ids));
+      unique.sort((a, b) => a.localeCompare(b));
+
+      for (const id of unique) {
+        const opt = document.createElement("option");
+        opt.value = id;
+        opt.textContent = id;
+        modelEl.appendChild(opt);
+      }
+
+      const want = (preferred || "").trim();
+      if (want && unique.includes(want)) {
+        modelEl.value = want;
+        return;
+      }
+      if (prev && unique.includes(prev)) {
+        modelEl.value = prev;
+        return;
+      }
+      if (unique.includes("fast")) {
+        modelEl.value = "fast";
+        return;
+      }
+      if (unique.length) {
+        modelEl.value = unique[0];
+      }
+    }
+
+    async function loadModels() {
+      try {
+        const resp = await fetch("/ui/api/models", { method: "GET" });
+        const text = await resp.text();
+        if (handle401(resp)) return;
+        if (!resp.ok) {
+          _setModelOptions(["fast"], "fast");
+          addMessage({ role: "system", content: text, meta: `Models HTTP ${resp.status}` });
+          return;
+        }
+
+        let payload;
+        try {
+          payload = JSON.parse(text);
+        } catch {
+          _setModelOptions(["fast"], "fast");
+          addMessage({ role: "system", content: "Models: invalid JSON" });
+          return;
+        }
+
+        const data = payload && Array.isArray(payload.data) ? payload.data : [];
+        const ids = data.map((m) => m && m.id).filter((x) => typeof x === "string");
+        _setModelOptions(ids, "fast");
+      } catch (e) {
+        _setModelOptions(["fast"], "fast");
+        addMessage({ role: "system", content: `Models error: ${String(e)}` });
+      }
+    }
+
+    async function ensureConversation() {
+      const fromStorage = (localStorage.getItem(CONVO_KEY) || "").trim();
+      if (fromStorage) {
+        conversationId = fromStorage;
+        return;
+      }
+
+      const resp = await fetch("/ui/api/conversations/new", { method: "POST" });
+      const text = await resp.text();
+      if (handle401(resp)) return;
+      if (!resp.ok) {
+        addMessage({ role: "system", content: text, meta: `Conversation HTTP ${resp.status}` });
+        return;
+      }
       let payload;
       try {
         payload = JSON.parse(text);
       } catch {
-        _setModelOptions(["fast"], "fast");
-        setMeta("Models: invalid JSON");
+        addMessage({ role: "system", content: "Conversation: invalid JSON" });
         return;
       }
-
-      const data = payload && Array.isArray(payload.data) ? payload.data : [];
-      const ids = data.map((m) => m && m.id).filter((x) => typeof x === "string");
-      _setModelOptions(ids, "fast");
-      setMeta(`Models loaded (${ids.length})`);
-    } catch (e) {
-      _setModelOptions(["fast"], "fast");
-      setMeta(`Models: ${String(e)}`);
-    }
-  }
-
-  async function send() {
-    const model = (modelEl.value || "").trim() || "fast";
-    const content = (inputEl.value || "").trim();
-
-    setMeta("");
-    if (!content) {
-      setOutput("Empty message.");
-      return;
+      const cid = payload && typeof payload.conversation_id === "string" ? payload.conversation_id.trim() : "";
+      if (!cid) {
+        addMessage({ role: "system", content: "Conversation: missing id" });
+        return;
+      }
+      conversationId = cid;
+      localStorage.setItem(CONVO_KEY, cid);
     }
 
-    setBusy(true);
-    setOutput("...");
-
-    try {
-      const resp = await fetch("/ui/api/chat", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model,
-          message: content,
-        }),
-      });
-
+    async function loadConversation() {
+      if (!conversationId) return;
+      const resp = await fetch(`/ui/api/conversations/${encodeURIComponent(conversationId)}`, { method: "GET" });
       const text = await resp.text();
+      if (handle401(resp)) return;
       if (!resp.ok) {
-        if (resp.status === 401) {
-          const back = encodeURIComponent(window.location.pathname + window.location.search);
-          window.location.href = `/ui/login?next=${back}`;
-          return;
-        }
-        setOutput(text);
-        setMeta(`HTTP ${resp.status}`);
+        addMessage({ role: "system", content: text, meta: `Load convo HTTP ${resp.status}` });
         return;
       }
-
       let payload;
       try {
         payload = JSON.parse(text);
       } catch {
-        setOutput(text);
-        setMeta(`OK${backend ? ` • ${backend}` : ""}${usedModel ? ` • ${usedModel}` : ""}`);
+        addMessage({ role: "system", content: text, meta: "Load convo OK (non-JSON)" });
         return;
       }
 
-      const msg = payload?.choices?.[0]?.message?.content;
-      setOutput(typeof msg === "string" ? msg : JSON.stringify(payload, null, 2));
-      const bits = [];
-      const gw = payload?._gateway;
-      if (gw?.backend) bits.push(`backend=${gw.backend}`);
-      if (gw?.model) bits.push(`model=${gw.model}`);
-      if (gw?.reason) bits.push(`reason=${gw.reason}`);
-      setMeta(bits.join(" • "));
-    } catch (e) {
-      setOutput(String(e));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function generateImage() {
-    const prompt = (imgPromptEl.value || "").trim();
-    const size = (imgSizeEl.value || "1024x1024").trim();
-
-    const stepsRaw = imgStepsEl ? String(imgStepsEl.value || "").trim() : "";
-    const seedRaw = imgSeedEl ? String(imgSeedEl.value || "").trim() : "";
-    const negative_prompt = imgNegEl ? String(imgNegEl.value || "").trim() : "";
-
-    setImgMeta("");
-    if (!prompt) {
-      setImgOutputHtml("Empty prompt.");
-      return;
+      const msgs = payload && Array.isArray(payload.messages) ? payload.messages : [];
+      for (const m of msgs) {
+        renderStoredMessage(m);
+      }
     }
 
-    imgGenerateEl.disabled = true;
-    setImgOutputHtml("...");
-    if (imgAutoGuidanceEl) imgAutoGuidanceEl.textContent = "Guidance: (auto)";
-
-    try {
-      const body = { prompt, size, n: 1 };
-
-      if (stepsRaw) {
-        const steps = Number(stepsRaw);
-        if (Number.isFinite(steps) && steps > 0) body.steps = Math.floor(steps);
-      }
-      if (seedRaw) {
-        const seed = Number(seedRaw);
-        if (Number.isFinite(seed)) body.seed = Math.floor(seed);
-      }
-      if (negative_prompt) {
-        body.negative_prompt = negative_prompt;
-      }
-
-      const resp = await fetch("/ui/api/image", {
+    async function appendToConversation(message) {
+      if (!conversationId) return;
+      await fetch(`/ui/api/conversations/${encodeURIComponent(conversationId)}/append`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
+        body: JSON.stringify({ message }),
       });
+    }
 
-      const text = await resp.text();
-      if (!resp.ok) {
-        if (resp.status === 401) {
-          const back = encodeURIComponent(window.location.pathname + window.location.search);
-          window.location.href = `/ui/login?next=${back}`;
+    function isLikelyImageRequest(text) {
+      const s = String(text || "").trim().toLowerCase();
+      if (!s) return false;
+      if (s.startsWith("/image ") || s.startsWith("/img ") || s.startsWith("image:")) return true;
+
+      const hasImageWord = /\b(image|picture|photo|photograph|art|artwork|illustration|drawing|sketch|render|logo|icon|avatar|wallpaper|poster|banner)\b/.test(s);
+      const hasMakeVerb = /\b(generate|create|make|draw|paint|illustrate|render|design)\b/.test(s);
+      if (hasImageWord && hasMakeVerb) return true;
+
+      if (/^(generate|create|make) (me )?(an |a )?(image|picture|photo|illustration|drawing|sketch|logo|icon|avatar|wallpaper|poster|banner)\b/.test(s)) {
+        return true;
+      }
+      if (/^draw (me |us )?(an |a )?\b/.test(s)) {
+        return true;
+      }
+      if (/^illustrate\b/.test(s)) {
+        return true;
+      }
+      return false;
+    }
+
+    function isLikelyMusicRequest(text) {
+      const s = String(text || "").trim().toLowerCase();
+      if (!s) return false;
+      if (s.startsWith("/music ") || s.startsWith("music:") || s.startsWith("/song ")) return true;
+
+      const hasMusicWord = /\b(music|song|tune|melody|track|beat|jam|riff)\b/.test(s);
+      const hasMakeVerb = /\b(generate|create|make|compose|write|produce)\b/.test(s);
+      if (hasMusicWord && hasMakeVerb) return true;
+
+      if (/^(generate|create|compose|make) (me )?(a |an )?\b/.test(s) && /\b(music|song|tune|melody|track)\b/.test(s)) return true;
+      return false;
+    }
+
+    async function sendChatMessage(userText) {
+      const model = (modelEl.value || "").trim() || "fast";
+
+      history.push({ role: "user", content: userText });
+      addMessage({ role: "user", content: userText });
+
+      const assistant = addMessage({ role: "assistant", content: "", meta: "Assistant" });
+      assistant.contentEl.textContent = "";
+      const thinkingLine = document.createElement("div");
+      thinkingLine.className = "thinking-line";
+      thinkingLine.style.display = "none";
+      const contentText = document.createElement("div");
+      contentText.className = "content-text";
+      assistant.contentEl.appendChild(thinkingLine);
+      assistant.contentEl.appendChild(contentText);
+
+      setBusy(true);
+
+      try {
+        const resp = await fetch("/ui/api/chat_stream", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ model, conversation_id: conversationId, message: userText }),
+        });
+
+        if (handle401(resp)) return;
+
+        const backend = resp.headers.get("x-backend-used") || "";
+        const usedModel = resp.headers.get("x-model-used") || "";
+        const reason = resp.headers.get("x-router-reason") || "";
+        let hasContent = false;
+        let thinkingShown = false;
+        let thinkingBuffer = "";
+        let isOllama = backend === "ollama";
+
+        if (!resp.ok) {
+          const text = await resp.text();
+          contentText.textContent = text;
+          assistant.metaEl.textContent = `HTTP ${resp.status}`;
           return;
         }
-        setImgOutputHtml(text);
-        setImgMeta(`HTTP ${resp.status}`);
-        return;
-      }
 
-      let payload;
-      try {
-        payload = JSON.parse(text);
-      } catch {
-        setImgOutputHtml(text);
-        setImgMeta("OK (non-JSON)");
-        return;
-      }
+        const setThinking = (text) => {
+          if (!text) {
+            thinkingLine.textContent = "";
+            thinkingLine.style.display = "none";
+            return;
+          }
+          thinkingLine.textContent = text;
+          thinkingLine.style.display = "block";
+          scrollToBottom();
+        };
 
-      const b64 = payload?.data?.[0]?.b64_json;
-      const url = payload?.data?.[0]?.url;
-      const mime = payload?._gateway?.mime || "image/png";
+        const showThinking = () => {
+          if (hasContent || thinkingShown || !isOllama) return;
+          setThinking("Thinking…");
+          thinkingShown = true;
+        };
 
-      const gwGuidance = payload?._gateway?.guidance_scale;
-      const gwGuidanceAuto = payload?._gateway?.guidance_auto;
-      if (imgAutoGuidanceEl) {
-        if (typeof gwGuidance === "number" && Number.isFinite(gwGuidance)) {
-          imgAutoGuidanceEl.textContent = `Guidance: ${gwGuidance}${gwGuidanceAuto ? " (auto)" : ""}`;
-        } else {
-          imgAutoGuidanceEl.textContent = "Guidance: (not provided)";
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder("utf-8");
+        let buf = "";
+        let full = "";
+
+        function updateMeta(extra) {
+          const bits = [];
+          if (backend) bits.push(`backend=${backend}`);
+          if (usedModel) bits.push(`model=${usedModel}`);
+          if (reason) bits.push(`reason=${reason}`);
+          if (extra) bits.push(extra);
+          assistant.metaEl.textContent = bits.length ? bits.join(" • ") : "Assistant";
         }
+
+        updateMeta("streaming");
+        showThinking();
+
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+
+          while (true) {
+            const idx = buf.indexOf("\n\n");
+            if (idx < 0) break;
+            const rawEvent = buf.slice(0, idx);
+            buf = buf.slice(idx + 2);
+
+            const lines = rawEvent.split("\n");
+            for (const line of lines) {
+              const trimmed = line.trim();
+              if (!trimmed.startsWith("data:")) continue;
+              const data = trimmed.slice(5).trim();
+              if (data === "[DONE]") {
+                updateMeta("done");
+                continue;
+              }
+
+              let evt;
+              try {
+                evt = JSON.parse(data);
+              } catch {
+                continue;
+              }
+
+              if (!evt || typeof evt !== "object") continue;
+
+              if (evt.type === "route") {
+                const bits = [];
+                if (evt.backend) bits.push(`backend=${evt.backend}`);
+                if (evt.model) bits.push(`model=${evt.model}`);
+                if (evt.reason) bits.push(`reason=${evt.reason}`);
+                assistant.metaEl.textContent = bits.join(" • ") || assistant.metaEl.textContent;
+                if (evt.backend) {
+                  isOllama = evt.backend === "ollama";
+                  showThinking();
+                }
+                continue;
+              }
+
+              if (evt.type === "thinking" && typeof evt.thinking === "string") {
+                thinkingBuffer += evt.thinking;
+                setThinking(`Thinking: ${thinkingBuffer}`);
+                thinkingShown = true;
+                continue;
+              }
+
+              if (evt.type === "delta" && typeof evt.delta === "string") {
+                if (!hasContent) {
+                  hasContent = true;
+                  if (thinkingShown) setThinking("");
+                }
+                full += evt.delta;
+                contentText.textContent = full;
+                scrollToBottom();
+                continue;
+              }
+
+              if (evt.type === "error") {
+                contentText.textContent = `${full}\n\n[error]\n${JSON.stringify(evt.error || evt, null, 2)}`;
+                updateMeta("error");
+                continue;
+              }
+
+              if (evt.type === "done") {
+                if (!hasContent && thinkingShown) {
+                  setThinking("");
+                }
+                updateMeta("done");
+                continue;
+              }
+            }
+          }
+        }
+
+        history.push({ role: "assistant", content: full });
+      } catch (e) {
+        addMessage({ role: "system", content: String(e) });
+      } finally {
+        setBusy(false);
       }
-
-      const req = payload?._gateway?.request;
-      const metaBits = [];
-      if (payload?._gateway?.backend) metaBits.push(`backend=${payload._gateway.backend}`);
-      if (payload?._gateway?.model) metaBits.push(`model=${payload._gateway.model}`);
-      if (req && typeof req === "object") {
-        if (req.size) metaBits.push(`size=${req.size}`);
-        if (req.steps !== undefined) metaBits.push(`steps=${req.steps}`);
-        if (req.num_inference_steps !== undefined) metaBits.push(`nis=${req.num_inference_steps}`);
-        if (req.seed !== undefined) metaBits.push(`seed=${req.seed}`);
-        if (req.negative_prompt) metaBits.push(`neg=yes`);
-        if (req.guidance_scale !== undefined) metaBits.push(`gs=${req.guidance_scale}`);
-        if (req.cfg_scale !== undefined) metaBits.push(`cfg=${req.cfg_scale}`);
-      }
-
-      const upstream = payload?._gateway?.upstream;
-      if (upstream && typeof upstream === "object") {
-        if (upstream.seed !== undefined) metaBits.push(`up_seed=${upstream.seed}`);
-        if (upstream.steps !== undefined) metaBits.push(`up_steps=${upstream.steps}`);
-        if (upstream.num_inference_steps !== undefined) metaBits.push(`up_nis=${upstream.num_inference_steps}`);
-        if (upstream.guidance_scale !== undefined) metaBits.push(`up_gs=${upstream.guidance_scale}`);
-        if (upstream.cfg_scale !== undefined) metaBits.push(`up_cfg=${upstream.cfg_scale}`);
-      }
-
-      const uiSha = payload?._gateway?.ui_image_sha256;
-      const uiMime = payload?._gateway?.ui_image_mime;
-      if (typeof uiMime === "string" && uiMime.trim()) metaBits.push(`mime=${uiMime.trim()}`);
-      if (typeof uiSha === "string" && uiSha.trim()) metaBits.push(`sha=${uiSha.trim().slice(0, 12)}`);
-
-      if (typeof url === "string" && url.trim()) {
-        const src = url.trim();
-        setImgOutputHtml(
-          `<img src="${src}" alt="generated" style="max-width:100%;height:auto;display:block;border-radius:12px;border:1px solid rgba(231,237,246,0.12)" />`
-        );
-        setImgMeta(metaBits.length ? metaBits.join(" • ") : "OK");
-        return;
-      }
-
-      if (typeof b64 !== "string" || !b64.trim()) {
-        setImgOutputHtml(JSON.stringify(payload, null, 2));
-        setImgMeta("OK (no image data)");
-        return;
-      }
-
-      const b64s = b64.trim();
-      const src = b64s.startsWith("data:") ? b64s : `data:${mime};base64,${b64s}`;
-      setImgOutputHtml(`<img src="${src}" alt="generated" style="max-width:100%;height:auto;display:block;border-radius:12px;border:1px solid rgba(231,237,246,0.12)" />`);
-      setImgMeta(metaBits.length ? metaBits.join(" • ") : "OK");
-    } catch (e) {
-      setImgOutputHtml(String(e));
-    } finally {
-      imgGenerateEl.disabled = false;
     }
-  }
 
-  sendEl.addEventListener("click", () => void send());
-  clearEl.addEventListener("click", () => {
-    inputEl.value = "";
-    setOutput("");
-    setMeta("");
-  });
+    async function generateMusic(body) {
+      try {
+        const resp = await fetch("/ui/api/music", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+        const text = await resp.text();
+        if (handle401(resp)) return;
+        if (!resp.ok) {
+          addMessage({ role: "system", content: text, meta: `Music HTTP ${resp.status}` });
+          return;
+        }
+        try {
+          const payload = JSON.parse(text);
+          addMessage({ role: "system", content: `Music response: ${JSON.stringify(payload)}` });
+        } catch {
+          addMessage({ role: "system", content: text });
+        }
+      } catch (e) {
+        addMessage({ role: "system", content: String(e) });
+      }
+    }
 
-  if (imgClearEl) {
-    imgClearEl.addEventListener("click", () => {
-      imgPromptEl.value = "";
-      if (imgStepsEl) imgStepsEl.value = "";
-      if (imgSeedEl) imgSeedEl.value = "";
-      if (imgNegEl) imgNegEl.value = "";
-      if (imgAutoGuidanceEl) imgAutoGuidanceEl.textContent = "Guidance: (auto)";
-      setImgOutputHtml("");
-      setImgMeta("");
+    async function generateImage(prompt, image_request) {
+      const body = { prompt, ...image_request };
+      try {
+        const resp = await fetch("/ui/api/image", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+        const text = await resp.text();
+        if (handle401(resp)) return;
+        if (!resp.ok) {
+          addMessage({ role: "system", content: text, meta: `Image HTTP ${resp.status}` });
+          return;
+        }
+        let payload;
+        try {
+          payload = JSON.parse(text);
+        } catch {
+          addMessage({ role: "system", content: text, meta: "Image OK (non-JSON)" });
+          return;
+        }
+        const b64 = payload?.data?.[0]?.b64_json;
+        const url = payload?.data?.[0]?.url;
+        if (typeof url === "string" && url.trim()) {
+          addMessage({ role: "assistant", html: `<img class="gen" src="${escapeHtml(url.trim())}" alt="generated" />` });
+          return;
+        }
+        if (typeof b64 === "string" && b64.trim()) {
+          const src = b64.trim().startsWith("data:") ? b64.trim() : `data:${payload?._gateway?.mime||'image/png'};base64,${b64.trim()}`;
+          addMessage({ role: "assistant", html: `<img class="gen" src="${escapeHtml(src)}" alt="generated" />` });
+          return;
+        }
+        addMessage({ role: "system", content: JSON.stringify(payload, null, 2) });
+      } catch (e) {
+        addMessage({ role: "system", content: String(e) });
+      }
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+      if (!chatEl) return;
+      loadAutoImageSetting();
+      void loadModels();
+      (async () => { await ensureConversation(); await loadConversation(); })();
+      if (sendEl) sendEl.addEventListener('click', async () => {
+        const text = (inputEl.value || '').trim();
+        if (!text) return;
+        inputEl.value = '';
+        if (isLikelyImageRequest(text) && (autoImageEl && autoImageEl.checked)) {
+          await generateImage(text, {});
+          return;
+        }
+        await sendChatMessage(text);
+      });
+      if (clearEl) clearEl.addEventListener('click', () => { if (inputEl) inputEl.value = ''; });
     });
-  }
-
-  if (imgGenerateEl) {
-    imgGenerateEl.addEventListener("click", () => void generateImage());
-  }
-
-  inputEl.addEventListener("keydown", (e) => {
-    if (e.key !== "Enter") return;
-    if (e.shiftKey) return; // allow newline
-    // Enter sends
-    e.preventDefault();
-    void send();
-  });
-
-  if (imgPromptEl) {
-    imgPromptEl.addEventListener("keydown", (e) => {
-      if (e.key !== "Enter") return;
-      if (e.shiftKey) return;
-      e.preventDefault();
-      void generateImage();
-    });
-  }
-
-  if (loadModelsEl) {
-    loadModelsEl.addEventListener("click", () => void loadModels());
-  }
-
+  })();
   setOutput("Ready.");
   setMeta("Ctrl+Enter to send");
   void loadModels();
