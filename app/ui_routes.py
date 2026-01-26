@@ -388,7 +388,7 @@ async def ui_api_music(req: Request) -> Dict[str, Any]:
 @router.post("/ui/api/tts", include_in_schema=False)
 async def ui_api_tts(req: Request):
     _require_ui_access(req)
-    _require_user(req)
+    user = _require_user(req)
     body = _coerce_tts_body(await req.json())
     backend_class = (getattr(S, "TTS_BACKEND_CLASS", "") or "").strip() or "pocket_tts"
 
