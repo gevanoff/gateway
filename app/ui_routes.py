@@ -557,7 +557,7 @@ async def ui_conversation_append(req: Request, conversation_id: str) -> Dict[str
 @router.get("/ui/images/{name}", include_in_schema=False)
 async def ui_image_file(req: Request, name: str):
     _require_ui_access(req)
-    _require_user(req)
+    user = _require_user(req)
 
     if not _SAFE_FILE_RE.match(name or ""):
         raise HTTPException(status_code=404, detail="not found")
