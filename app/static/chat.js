@@ -93,6 +93,12 @@
       });
       const text = await resp.text();
       if (!resp.ok) {
+        if (resp.status === 401) {
+          // Session missing or expired — send user to login UI
+          const back = encodeURIComponent(window.location.pathname + window.location.search);
+          window.location.href = `/ui/login?next=${back}`;
+          return;
+        }
         _setModelOptions(["fast"], "fast");
         setMeta(`Models: HTTP ${resp.status}`);
         setOutput(text);
@@ -145,6 +151,11 @@
 
       const text = await resp.text();
       if (!resp.ok) {
+        if (resp.status === 401) {
+          const back = encodeURIComponent(window.location.pathname + window.location.search);
+          window.location.href = `/ui/login?next=${back}`;
+          return;
+        }
         setOutput(text);
         setMeta(`HTTP ${resp.status}`);
         return;
@@ -215,6 +226,11 @@
 
       const text = await resp.text();
       if (!resp.ok) {
+        if (resp.status === 401) {
+          const back = encodeURIComponent(window.location.pathname + window.location.search);
+          window.location.href = `/ui/login?next=${back}`;
+          return;
+        }
         setImgOutputHtml(text);
         setImgMeta(`HTTP ${resp.status}`);
         return;
