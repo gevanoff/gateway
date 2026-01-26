@@ -600,7 +600,7 @@ async def ui_image_file(req: Request, name: str):
 @router.get("/ui/api/models", include_in_schema=False)
 async def ui_models(req: Request) -> Dict[str, Any]:
     _require_ui_access(req)
-    _require_user(req)
+    user = _require_user(req)
 
     now = now_unix()
     data: Dict[str, Any] = {"object": "list", "data": []}
