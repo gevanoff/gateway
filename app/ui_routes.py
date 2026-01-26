@@ -655,7 +655,7 @@ async def ui_models(req: Request) -> Dict[str, Any]:
 @router.post("/ui/api/chat", include_in_schema=False)
 async def ui_chat(req: Request) -> Dict[str, Any]:
     _require_ui_access(req)
-    _require_user(req)
+    user = _require_user(req)
     body = await req.json()
     model = (body.get("model") or "fast").strip()
     message = (body.get("message") or "").strip()
@@ -893,7 +893,7 @@ async def ui_chat_stream(req: Request):
     """
 
     _require_ui_access(req)
-    _require_user(req)
+    user = _require_user(req)
     body = await req.json()
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="body must be an object")
