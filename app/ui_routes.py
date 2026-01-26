@@ -29,8 +29,6 @@ from app.router import decide_route
 from app.router_cfg import router_cfg
 from app.upstreams import call_mlx_openai, call_ollama, stream_mlx_openai_chat, stream_ollama_chat_as_openai
 from app.images_backend import generate_images
-from app.backends import check_capability, get_admission_controller
-from app.health_checker import check_backend_ready
 from app.tts_backend import generate_tts
 from app import ui_conversations
 from app import user_store
@@ -131,6 +129,34 @@ def _require_user(req: Request) -> Optional[user_store.User]:
     except Exception:
         pass
     return user
+
+
+def _coerce_tts_body(body: Any) -> Dict[str, Any]:
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="body must be an object")
+
+    text = body.get("text")
+    if not isinstance(text, str) or not text.strip():
+        alt = body.get("input")
+        if not isinstance(alt, str) or not alt.strip():
+            raise HTTPException(status_code=400, detail="text is required")
+    return body
+
+
+def _tts_gateway_headers(meta: Dict[str, Any]) -> Dict[str, str]:
+    headers: Dict[str, str] = {}
+    if not isinstance(meta, dict):
+        return headers
+    backend = meta.get("backend")
+    backend_class = meta.get("backend_class")
+    latency = meta.get("upstream_latency_ms")
+    if backend:
+        headers["x-gateway-backend"] = str(backend)
+    if backend_class:
+        headers["x-gateway-backend-class"] = str(backend_class)
+    if latency is not None:
+        headers["x-gateway-upstream-latency-ms"] = str(latency)
+    return headers
 
 
 def _ui_image_dir() -> str:
@@ -293,6 +319,11 @@ async def ui(req: Request) -> HTMLResponse:
     return HTMLResponse(html_path.read_text(encoding="utf-8"))
 
 
+@router.get("/ui/", include_in_schema=False)
+async def ui_slash(req: Request) -> HTMLResponse:
+    return await ui(req)
+
+
 @router.get("/ui1", include_in_schema=False)
 async def ui1(req: Request) -> HTMLResponse:
     _require_ui_access(req)
@@ -300,11 +331,21 @@ async def ui1(req: Request) -> HTMLResponse:
     return HTMLResponse(html_path.read_text(encoding="utf-8"))
 
 
+@router.get("/ui1/", include_in_schema=False)
+async def ui1_slash(req: Request) -> HTMLResponse:
+    return await ui1(req)
+
+
 @router.get("/ui2", include_in_schema=False)
 async def ui2(req: Request) -> HTMLResponse:
     _require_ui_access(req)
     html_path = Path(__file__).with_name("static").joinpath("chat2.html")
     return HTMLResponse(html_path.read_text(encoding="utf-8"))
+
+
+@router.get("/ui2/", include_in_schema=False)
+async def ui2_slash(req: Request) -> HTMLResponse:
+    return await ui2(req)
 
 
 @router.get("/ui/image", include_in_schema=False)
@@ -352,6 +393,39 @@ async def ui_api_music(req: Request) -> Dict[str, Any]:
         raise HTTPException(status_code=502, detail=f"music backend failed: {e}")
 
     return out
+
+
+@router.post("/ui/api/tts", include_in_schema=False)
+async def ui_api_tts(req: Request):
+    _require_ui_access(req)
+    _require_user(req)
+    body = _coerce_tts_body(await req.json())
+    backend_class = (getattr(S, "TTS_BACKEND_CLASS", "") or "").strip() or "pocket_tts"
+
+    check_backend_ready(backend_class, route_kind="tts")
+    await check_capability(backend_class, "tts")
+
+    admission = get_admission_controller()
+    await admission.acquire(backend_class, "tts")
+    try:
+        result = await generate_tts(backend_class=backend_class, body=body)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"tts backend error: {type(e).__name__}: {e}")
+    finally:
+        admission.release(backend_class, "tts")
+
+    headers = _tts_gateway_headers(result.gateway)
+    if result.kind == "json":
+        payload = result.payload
+        if isinstance(payload, dict):
+            payload.setdefault("_gateway", {}).update(result.gateway)
+        return JSONResponse(payload or {}, headers=headers)
+
+    if result.audio is None:
+        raise HTTPException(status_code=502, detail="tts backend returned no audio")
+    return StreamingResponse(result.audio, media_type=result.content_type, headers=headers)
 
 
 @router.post("/ui/api/auth/login", include_in_schema=False)
