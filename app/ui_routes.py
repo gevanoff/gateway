@@ -325,6 +325,19 @@ async def ui_slash(req: Request) -> HTMLResponse:
 
 
 
+@router.get("/ui/login", include_in_schema=False)
+async def ui_login(req: Request) -> HTMLResponse:
+    _require_ui_access(req)
+    html_path = Path(__file__).with_name("static").joinpath("login.html")
+    return HTMLResponse(html_path.read_text(encoding="utf-8"))
+
+
+@router.get("/ui/login/", include_in_schema=False)
+async def ui_login_slash(req: Request) -> HTMLResponse:
+    return await ui_login(req)
+
+
+
 @router.get("/ui/image", include_in_schema=False)
 async def ui_image_frontend(req: Request) -> HTMLResponse:
     _require_ui_access(req)

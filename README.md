@@ -120,6 +120,8 @@ Gateway UI endpoints can optionally require per-user login, with user settings a
 
 When `USER_AUTH_ENABLED=true`, UI API calls require a session created via `POST /ui/api/auth/login` and will store user-specific settings (`/ui/api/user/settings`) and conversation history (`/ui/api/conversations/*`) in the backing database.
 
+Note: the `users.sqlite` DB under `/var/lib/gateway/data` is owned by the `gateway` service user. To create users that the running gateway process can access, run the `manage_users.py` command as the `gateway` user (for example: `sudo -u gateway /var/lib/gateway/env/bin/python -m tools.manage_users create <username>`). Running the command as another account may produce "attempt to write a readonly database" errors.
+
 Endpoints (bearer-protected):
 
 - `POST /v1/agent/run`
