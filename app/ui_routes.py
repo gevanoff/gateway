@@ -437,6 +437,17 @@ async def ui_api_tts_voices(req: Request):
     if not base:
         raise HTTPException(status_code=404, detail="tts backend not configured")
 
+    # Special-case local pocket_tts which does not expose a voice-listing endpoint.
+    # If pocket_tts is available at runtime and defines PREDEFINED_VOICES, return that.
+    try:
+        if backend_class and "pocket" in backend_class:
+            from pocket_tts.utils.utils import PREDEFINED_VOICES  # type: ignore
+            if PREDEFINED_VOICES:
+                return JSONResponse(list(PREDEFINED_VOICES))
+    except Exception:
+        # Import failure or missing symbol — fall back to probing HTTP endpoints below.
+        pass
+
     async with httpx.AsyncClient(timeout=10) as client:
         last_err = None
         for p in ("/v1/voices", "/voices"):

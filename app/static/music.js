@@ -133,12 +133,10 @@
 
     const sliders = document.createElement("div");
     sliders.className = "audio-sliders";
-    const seek = document.createElement("input");
-    seek.type = "range";
-    seek.min = "0";
-    seek.max = "0";
-    seek.value = "0";
-    seek.step = "0.01";
+    // Remove seek slider for music thumbnails; only expose labeled volume control.
+    const volumeLabel = document.createElement("span");
+    volumeLabel.textContent = "Volume";
+    volumeLabel.className = "volume-label";
     const volume = document.createElement("input");
     volume.type = "range";
     volume.min = "0";
@@ -146,7 +144,7 @@
     volume.step = "0.01";
     volume.value = String(audio.volume);
     volume.title = "Volume";
-    sliders.appendChild(seek);
+    sliders.appendChild(volumeLabel);
     sliders.appendChild(volume);
 
     controls.appendChild(meta);
@@ -176,18 +174,11 @@
 
     audio.addEventListener("loadedmetadata", () => {
       if (Number.isFinite(audio.duration)) {
-        seek.max = String(audio.duration);
         totalEl.textContent = formatTime(audio.duration);
       }
     });
     audio.addEventListener("timeupdate", () => {
       currentEl.textContent = formatTime(audio.currentTime);
-      if (!seek.matches(":active")) {
-        seek.value = String(audio.currentTime);
-      }
-    });
-    seek.addEventListener("input", () => {
-      audio.currentTime = Number(seek.value);
     });
     volume.addEventListener("input", () => {
       audio.volume = Number(volume.value);

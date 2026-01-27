@@ -273,7 +273,57 @@
     }
   }
 
-  // Load available voices (best-effort) and bind UI handlers.
-  void loadVoices();
-  generateEl.addEventListener("click", handleGenerate);
+  async function loadUserSettings() {
+    try {
+      const resp = await fetch('/ui/api/user/settings', { method: 'GET', credentials: 'same-origin' });
+      if (!resp.ok) return null;
+      const payload = await resp.json();
+      return payload && payload.settings ? payload.settings : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  async function saveUserSettings(settings) {
+    try {
+      const resp = await fetch('/ui/api/user/settings', {
+        method: 'PUT',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ settings }),
+      });
+      return resp.ok;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  // Load available voices, apply saved setting (server or localStorage), and bind UI handlers.
+  (async () => {
+    await loadVoices();
+
+    // Try server-side settings first; fall back to localStorage for unauthenticated users.
+    const serverSettings = await loadUserSettings();
+    if (serverSettings && serverSettings.tts && serverSettings.tts.voice && voiceEl) {
+      try { voiceEl.value = serverSettings.tts.voice; } catch (e) {}
+    } else {
+      try {
+        const saved = localStorage.getItem('gw_ui_tts_voice');
+        if (saved && voiceEl) voiceEl.value = saved;
+      } catch (e) {}
+    }
+
+    if (voiceEl) {
+      voiceEl.addEventListener('change', async () => {
+        const val = String(voiceEl.value || '').trim();
+        // Try to persist server-side; if that fails (401 or network), save to localStorage.
+        const ok = await saveUserSettings({ tts: { voice: val } });
+        if (!ok) {
+          try { localStorage.setItem('gw_ui_tts_voice', val); } catch (e) {}
+        }
+      });
+    }
+
+    generateEl.addEventListener('click', handleGenerate);
+  })();
 })();
