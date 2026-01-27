@@ -233,6 +233,85 @@ def _sniff_mime(raw: bytes) -> str | None:
     return None
 
 
+def _ui_audio_dir() -> str:
+    return (getattr(S, "UI_AUDIO_DIR", "") or "/var/lib/gateway/data/ui_audio").strip() or "/var/lib/gateway/data/ui_audio"
+
+
+def _ui_audio_ttl_sec() -> int:
+    try:
+        return int(getattr(S, "UI_AUDIO_TTL_SEC", 900) or 900)
+    except Exception:
+        return 900
+
+
+def _ui_audio_max_bytes() -> int:
+    try:
+        return int(getattr(S, "UI_AUDIO_MAX_BYTES", 100_000_000) or 100_000_000)
+    except Exception:
+        return 100_000_000
+
+
+def _cleanup_ui_audio(path: str, *, ttl_sec: int) -> None:
+    if ttl_sec <= 0:
+        return
+    now = time.time()
+    cutoff = now - float(ttl_sec)
+    try:
+        for name in os.listdir(path):
+            full = os.path.join(path, name)
+            try:
+                st = os.stat(full)
+                if st.st_mtime < cutoff:
+                    os.remove(full)
+            except FileNotFoundError:
+                continue
+            except Exception:
+                continue
+    except Exception:
+        return
+
+
+def _audio_mime_to_ext(mime: str) -> str:
+    m = (mime or "").lower().strip()
+    if m in ("audio/wav", "audio/x-wav"):
+        return "wav"
+    if m in ("audio/mpeg", "audio/mp3"):
+        return "mp3"
+    if m == "audio/ogg":
+        return "ogg"
+    if m == "audio/webm":
+        return "webm"
+    return "bin"
+
+
+def _save_ui_audio(*, audio_bytes: bytes, mime_hint: str) -> tuple[str, str]:
+    audio_dir = _ui_audio_dir()
+    ttl_sec = _ui_audio_ttl_sec()
+    max_bytes = _ui_audio_max_bytes()
+    _ensure_dir(audio_dir)
+    _cleanup_ui_audio(audio_dir, ttl_sec=ttl_sec)
+
+    if not isinstance(audio_bytes, (bytes, bytearray)):
+        raise ValueError("audio_bytes must be bytes")
+    if len(audio_bytes) > max_bytes:
+        raise ValueError(f"audio too large to cache ({len(audio_bytes)} bytes > {max_bytes})")
+
+    sha256 = hashlib.sha256(bytes(audio_bytes)).hexdigest()
+    mime = (mime_hint or "audio/wav").strip()
+    ext = _audio_mime_to_ext(mime)
+    name = f"{secrets.token_urlsafe(18)}.{ext}"
+    name = name.replace("-", "_")
+    if not _SAFE_FILE_RE.match(name):
+        raise ValueError("failed to generate safe filename")
+
+    tmp = os.path.join(audio_dir, f".{name}.tmp")
+    dst = os.path.join(audio_dir, name)
+    with open(tmp, "wb") as f:
+        f.write(audio_bytes)
+    os.replace(tmp, dst)
+    return f"/ui/audio/{name}", sha256
+
+
 def _gateway_headers(meta: Dict[str, Any]) -> Dict[str, str]:
     headers: Dict[str, str] = {}
     if not isinstance(meta, dict):
@@ -420,6 +499,13 @@ async def ui_api_tts(req: Request):
     # Starlette's `stream_response` later tries to `.encode()` on strings and
     # will fail for ints. Wrap the bytes in an iterator that yields a single
     # bytes chunk so StreamingResponse sees a bytes-like chunk.
+    # Also expose a temporary UI URL for chat consumers by caching the bytes
+    try:
+        url, _ = _save_ui_audio(audio_bytes=result.audio, mime_hint=result.content_type)
+        # If successful, include a short helper link in headers for clients.
+        headers.setdefault("X-Gateway-TTS-URL", url)
+    except Exception:
+        pass
     return StreamingResponse(iter([result.audio]), media_type=result.content_type, headers=headers)
 
 
@@ -488,6 +574,20 @@ async def ui_api_tts_voices(req: Request):
                 last_err = e
 
     raise HTTPException(status_code=502, detail=f"tts backend voices query failed: {last_err}")
+
+
+@router.get("/ui/audio/{name}", include_in_schema=False)
+async def ui_get_audio(req: Request, name: str):
+    _require_ui_access(req)
+    # Serve cached UI audio files written by _save_ui_audio.
+    if not _SAFE_FILE_RE.match(name):
+        raise HTTPException(status_code=404, detail="audio not found")
+    audio_dir = _ui_audio_dir()
+    path = os.path.join(audio_dir, name)
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="audio not found")
+    # Let FileResponse infer content-type from extension; fallback to octet-stream
+    return FileResponse(path)
 
 
 @router.post("/ui/api/auth/login", include_in_schema=False)
@@ -836,6 +936,104 @@ def _conversation_to_chat_messages(convo: ui_conversations.Conversation) -> list
     return msgs
 
 
+async def _stream_ui_chat(
+    upstream_gen: Any,
+    backend: str,
+    upstream_model: str,
+    route: Any,
+    conversation_id: str,
+    user: Any,
+    backend_class: str,
+    admission: Any,
+    pre_events: list | None = None,
+):
+    try:
+        # Emit any pre-collected events from server-side command handling.
+        if pre_events:
+            for ev in pre_events:
+                try:
+                    yield sse(ev)
+                except Exception:
+                    # best-effort: skip malformed pre-events
+                    continue
+
+        # Announce routing info first
+        yield sse({"type": "route", "backend": backend, "model": upstream_model, "reason": route.reason})
+
+        full_text = ""
+
+        async for chunk in upstream_gen:
+            for line in chunk.splitlines():
+                if not line.startswith(b"data:"):
+                    continue
+                data = line[len(b"data:") :].strip()
+                if data == b"[DONE]":
+                    yield sse({"type": "done"})
+                    yield sse_done()
+                    return
+
+                try:
+                    j = json.loads(data)
+                except Exception:
+                    continue
+
+                if isinstance(j, dict) and isinstance(j.get("error"), dict):
+                    yield sse({"type": "error", "error": j.get("error")})
+                    continue
+
+                try:
+                    delta = (((j or {}).get("choices") or [{}])[0].get("delta") or {})
+                    text = delta.get("content")
+                    thinking = delta.get("thinking")
+                except Exception:
+                    text = None
+                    thinking = None
+
+                if isinstance(thinking, str) and thinking:
+                    yield sse({"type": "thinking", "thinking": thinking})
+
+                if isinstance(text, str) and text:
+                    full_text += text
+                    yield sse({"type": "delta", "delta": text})
+
+        # After streaming completes, persist assistant message (if any)
+        if conversation_id:
+            try:
+                if user is None:
+                    ui_conversations.append_message(
+                        conversation_id,
+                        {
+                            "role": "assistant",
+                            "content": full_text,
+                            "backend": backend,
+                            "model": upstream_model,
+                            "reason": route.reason,
+                        },
+                    )
+                else:
+                    user_store.append_message(
+                        S.USER_DB_PATH,
+                        user_id=user.id,
+                        conversation_id=conversation_id,
+                        msg={
+                            "role": "assistant",
+                            "content": full_text,
+                            "backend": backend,
+                            "model": upstream_model,
+                            "reason": route.reason,
+                        },
+                    )
+            except Exception:
+                # Best-effort persistence; do not fail the stream on storage errors.
+                pass
+
+        # Signal completion to the UI
+        yield sse({"type": "done"})
+        yield sse_done()
+    finally:
+        admission.release(backend_class, "chat")
+
+
 def _conversation_payload_to_chat_messages(convo: Dict[str, Any]) -> list[ChatMessage]:
     msgs: list[ChatMessage] = []
     summary = str(convo.get("summary") or "").strip()
@@ -1039,6 +1237,9 @@ async def ui_chat_stream(req: Request):
     if not messages:
         raise HTTPException(status_code=400, detail="messages required")
     
+    # Collect pre-stream events produced by server-side command handling.
+    pre_events: list[dict] = []
+
     # Server-side command handling: if the user sent a single leading slash-command
     # like `/image`, `/music`, or `/speech`, invoke the appropriate backend and
     # emit a short SSE update with the backend result before continuing to the
@@ -1053,7 +1254,7 @@ async def ui_chat_stream(req: Request):
                 prompt = cmd.replace("/image", "", 1).strip()
                 try:
                     # Announce backend work to the UI
-                    yield sse({"type": "thinking", "thinking": "Generating image…"})
+                    pre_events.append({"type": "thinking", "thinking": "Generating image…"})
                     resp = await generate_images(prompt=prompt or "", size="1024x1024", n=1, model=None, options=None, response_format="url")
                     url = None
                     if isinstance(resp, dict):
@@ -1068,7 +1269,7 @@ async def ui_chat_stream(req: Request):
                                 except Exception:
                                     url = None
                     if url:
-                        yield sse({"type": "delta", "delta": f"[Image] {url}"})
+                        pre_events.append({"type": "delta", "delta": f"[Image] {url}"})
                         # persist to conversation if present
                         try:
                             if conversation_id:
@@ -1079,21 +1280,21 @@ async def ui_chat_stream(req: Request):
                         except Exception:
                             pass
                     else:
-                        yield sse({"type": "delta", "delta": "[Image] generation returned no usable URL"})
+                        pre_events.append({"type": "delta", "delta": "[Image] generation returned no usable URL"})
                 except Exception as e:
-                    yield sse({"type": "delta", "delta": f"[Image] generation failed: {type(e).__name__}: {e}"})
+                    pre_events.append({"type": "delta", "delta": f"[Image] generation failed: {type(e).__name__}: {e}"})
 
             # /music
             elif low == "/music" or low.startswith("/music "):
                 prompt = cmd.replace("/music", "", 1).strip()
                 try:
-                    yield sse({"type": "thinking", "thinking": "Generating music…"})
+                    pre_events.append({"type": "thinking", "thinking": "Generating music…"})
                     from app.music_backend import generate_music
 
                     out = await generate_music(backend_class=getattr(S, "MUSIC_BACKEND_CLASS", "heartmula_music"), body={"prompt": prompt})
                     url = out.get("audio_url") if isinstance(out, dict) else None
                     if url:
-                        yield sse({"type": "delta", "delta": f"[Music] {url}"})
+                        pre_events.append({"type": "delta", "delta": f"[Music] {url}"})
                         try:
                             if conversation_id:
                                 if user is None:
@@ -1103,15 +1304,15 @@ async def ui_chat_stream(req: Request):
                         except Exception:
                             pass
                     else:
-                        yield sse({"type": "delta", "delta": "[Music] generation returned no audio URL"})
+                        pre_events.append({"type": "delta", "delta": "[Music] generation returned no audio URL"})
                 except Exception as e:
-                    yield sse({"type": "delta", "delta": f"[Music] generation failed: {type(e).__name__}: {e}"})
+                    pre_events.append({"type": "delta", "delta": f"[Music] generation failed: {type(e).__name__}: {e}"})
 
             # /speech or /tts
             elif low == "/speech" or low.startswith("/speech ") or low.startswith("/tts"):
                 prompt = cmd.replace("/speech", "", 1).replace("/tts", "", 1).strip()
                 try:
-                    yield sse({"type": "thinking", "thinking": "Synthesizing speech…"})
+                    pre_events.append({"type": "thinking", "thinking": "Synthesizing speech…"})
                     backend_class = (getattr(S, "TTS_BACKEND_CLASS", "") or "").strip() or "pocket_tts"
                     check_backend_ready(backend_class, route_kind="tts")
                     await check_capability(backend_class, "tts")
@@ -1125,14 +1326,35 @@ async def ui_chat_stream(req: Request):
                         admission.release(backend_class, "tts")
 
                     audio_url = None
+                    # If backend returned a dict containing an audio_url, use it.
                     if isinstance(res, dict):
                         audio_url = res.get("audio_url")
                     else:
-                        # TtsResult case handled by ui_api_tts: raw bytes returned as StreamingResponse, so we can't easily produce a URL here.
-                        audio_url = None
+                        # TtsResult: if raw bytes present, try to cache and expose a UI URL.
+                        try:
+                            raw = getattr(res, "audio", None)
+                            ctype = getattr(res, "content_type", "audio/wav")
+                            if raw:
+                                url, _ = _save_ui_audio(audio_bytes=raw, mime_hint=ctype)
+                                audio_url = url
+                        except Exception:
+                            audio_url = None
 
                     if audio_url:
-                        yield sse({"type": "delta", "delta": f"[Speech] {audio_url}"})
+                        # Emit structured audio event for the UI to play.
+                        ctype_local = None
+                        try:
+                            ctype_local = ctype  # defined when we cached raw bytes
+                        except Exception:
+                            ctype_local = None
+                        fname = os.path.basename(audio_url) if isinstance(audio_url, str) else None
+                        ev = {"type": "audio", "url": audio_url}
+                        if ctype_local:
+                            ev["content_type"] = ctype_local
+                        if fname:
+                            ev["filename"] = fname
+                        ev["meta"] = {"backend": backend_class}
+                        pre_events.append(ev)
                         try:
                             if conversation_id:
                                 if user is None:
@@ -1142,9 +1364,9 @@ async def ui_chat_stream(req: Request):
                         except Exception:
                             pass
                     else:
-                        yield sse({"type": "delta", "delta": "[Speech] synthesized audio available in TTS UI or returned inline."})
+                        pre_events.append({"type": "delta", "delta": "[Speech] synthesized audio available in TTS UI or returned inline."})
                 except Exception as e:
-                    yield sse({"type": "delta", "delta": f"[Speech] synthesis failed: {type(e).__name__}: {e}"})
+                    pre_events.append({"type": "delta", "delta": f"[Speech] synthesis failed: {type(e).__name__}: {e}"})
     except Exception:
         # best-effort only; do not fail the chat stream on command-handling errors
         pass
@@ -1196,85 +1418,20 @@ async def ui_chat_stream(req: Request):
         admission.release(backend_class, "chat")
         raise
 
-    async def gen():
-        try:
-            # Announce routing info first
-            yield sse({"type": "route", "backend": backend, "model": upstream_model, "reason": route.reason})
-
-            full_text = ""
-
-            async for chunk in upstream_gen:
-                for line in chunk.splitlines():
-                    if not line.startswith(b"data:"):
-                        continue
-                    data = line[len(b"data:") :].strip()
-                    if data == b"[DONE]":
-                        yield sse({"type": "done"})
-                        yield sse_done()
-                        return
-
-                    try:
-                        j = json.loads(data)
-                    except Exception:
-                        continue
-
-                    if isinstance(j, dict) and isinstance(j.get("error"), dict):
-                        yield sse({"type": "error", "error": j.get("error")})
-                        continue
-
-                    try:
-                        delta = (((j or {}).get("choices") or [{}])[0].get("delta") or {})
-                        text = delta.get("content")
-                        thinking = delta.get("thinking")
-                    except Exception:
-                        text = None
-                        thinking = None
-
-                    if isinstance(thinking, str) and thinking:
-                        yield sse({"type": "thinking", "thinking": thinking})
-
-                    if isinstance(text, str) and text:
-                        full_text += text
-                        yield sse({"type": "delta", "delta": text})
-
-            # After streaming completes, persist assistant message (if any)
-            if conversation_id:
-                try:
-                    if user is None:
-                        ui_conversations.append_message(
-                            conversation_id,
-                            {
-                                "role": "assistant",
-                                "content": full_text,
-                                "backend": backend,
-                                "model": upstream_model,
-                                "reason": route.reason,
-                            },
-                        )
-                    else:
-                        user_store.append_message(
-                            S.USER_DB_PATH,
-                            user_id=user.id,
-                            conversation_id=conversation_id,
-                            msg={
-                                "role": "assistant",
-                                "content": full_text,
-                                "backend": backend,
-                                "model": upstream_model,
-                                "reason": route.reason,
-                            },
-                        )
-                except Exception:
-                    # Best-effort persistence; do not fail the stream on storage errors.
-                    pass
-
-            # Signal completion to the UI
-            yield sse({"type": "done"})
-            yield sse_done()
-        finally:
-            admission.release(backend_class, "chat")
-
-    out = StreamingResponse(gen(), media_type="text/event-stream")
+    out = StreamingResponse(
+        _stream_ui_chat(
+            upstream_gen=upstream_gen,
+            backend=backend,
+            upstream_model=upstream_model,
+            route=route,
+            conversation_id=conversation_id,
+            user=user,
+            backend_class=backend_class,
+            admission=admission,
+            pre_events=pre_events,
+        ),
+        media_type="text/event-stream",
+    )
     out.headers["X-Backend-Used"] = backend
     out.headers["X-Model-Used"] = upstream_model
     out.headers["X-Router-Reason"] = route.reason

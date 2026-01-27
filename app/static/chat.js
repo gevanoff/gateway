@@ -588,6 +588,18 @@
                 continue;
               }
 
+              if (evt.type === "audio") {
+                const url = String(evt.url || "").trim();
+                if (url) {
+                  const player = createAudioPlayer(url);
+                  assistant.contentEl.innerHTML = "";
+                  assistant.contentEl.appendChild(player);
+                  hasContent = true;
+                  if (thinkingShown) setThinking("");
+                }
+                continue;
+              }
+
               if (evt.type === "thinking" && typeof evt.thinking === "string") {
                 thinkingBuffer += evt.thinking;
                 setThinking(`Thinking: ${thinkingBuffer}`);
@@ -742,6 +754,15 @@
         if (!resp.ok) {
           const txt = await resp.text();
           assistant.contentEl.textContent = `TTS HTTP ${resp.status}: ${txt}`;
+          return;
+        }
+
+        // Prefer server-provided cached UI URL when available.
+        const gatewayUrl = resp.headers.get("x-gateway-tts-url") || resp.headers.get("X-Gateway-TTS-URL");
+        if (gatewayUrl) {
+          const player = createAudioPlayer(String(gatewayUrl).trim());
+          assistant.contentEl.innerHTML = "";
+          assistant.contentEl.appendChild(player);
           return;
         }
 
