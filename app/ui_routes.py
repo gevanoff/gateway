@@ -29,7 +29,7 @@ from app.router import decide_route
 from app.router_cfg import router_cfg
 from app.upstreams import call_mlx_openai, call_ollama, stream_mlx_openai_chat, stream_ollama_chat_as_openai
 from app.images_backend import generate_images
-from app.tts_backend import generate_tts
+from app.tts_backend import generate_tts, _effective_tts_base_url
 from app import ui_conversations
 from app import user_store
 
@@ -420,6 +420,37 @@ async def ui_api_tts(req: Request):
     # will fail for ints. Wrap the bytes in an iterator that yields a single
     # bytes chunk so StreamingResponse sees a bytes-like chunk.
     return StreamingResponse(iter([result.audio]), media_type=result.content_type, headers=headers)
+
+
+@router.get("/ui/api/tts/voices", include_in_schema=False)
+async def ui_api_tts_voices(req: Request):
+    """Proxy the TTS backend's voices list for the UI.
+
+    This is best-effort: different backends may expose different shapes. We
+    try common voice-listing paths and return the first successful JSON.
+    """
+    _require_ui_access(req)
+    _require_user(req)
+
+    backend_class = (getattr(S, "TTS_BACKEND_CLASS", "") or "").strip() or "pocket_tts"
+    base = _effective_tts_base_url(backend_class=backend_class)
+    if not base:
+        raise HTTPException(status_code=404, detail="tts backend not configured")
+
+    async with httpx.AsyncClient(timeout=10) as client:
+        last_err = None
+        for p in ("/v1/voices", "/voices"):
+            try:
+                r = await client.get(f"{base}{p}")
+                if 200 <= r.status_code < 300:
+                    try:
+                        return JSONResponse(r.json())
+                    except Exception:
+                        return JSONResponse({"data": r.text})
+            except Exception as e:
+                last_err = e
+
+    raise HTTPException(status_code=502, detail=f"tts backend voices query failed: {last_err}")
 
 
 @router.post("/ui/api/auth/login", include_in_schema=False)

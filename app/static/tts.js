@@ -46,6 +46,49 @@
     return body;
   }
 
+  async function loadVoices() {
+    if (!voiceEl) return;
+    try {
+      const resp = await fetch('/ui/api/tts/voices', { method: 'GET', credentials: 'same-origin' });
+      if (!resp.ok) return;
+      let payload;
+      try {
+        payload = await resp.json();
+      } catch {
+        return;
+      }
+
+      let list = [];
+      if (Array.isArray(payload)) {
+        list = payload;
+      } else if (Array.isArray(payload.voices)) {
+        list = payload.voices;
+      } else if (Array.isArray(payload.data)) {
+        list = payload.data;
+      } else if (Array.isArray(payload.items)) {
+        list = payload.items;
+      }
+
+      for (const v of list) {
+        let val = '';
+        let label = '';
+        if (typeof v === 'string') {
+          val = v; label = v;
+        } else if (v && typeof v === 'object') {
+          val = v.id || v.name || v.voice || JSON.stringify(v);
+          label = v.name || v.id || v.voice || val;
+        }
+        if (!val) continue;
+        const opt = document.createElement('option');
+        opt.value = val;
+        opt.textContent = label;
+        voiceEl.appendChild(opt);
+      }
+    } catch (e) {
+      // ignore failures; voices are optional
+    }
+  }
+
   function formatTime(seconds) {
     const total = Number.isFinite(seconds) ? Math.max(0, seconds) : 0;
     const mins = Math.floor(total / 60);
@@ -239,5 +282,7 @@
     }
   }
 
+  // Load available voices (best-effort) and bind UI handlers.
+  void loadVoices();
   generateEl.addEventListener("click", handleGenerate);
 })();
