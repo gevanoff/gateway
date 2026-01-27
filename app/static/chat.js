@@ -323,6 +323,27 @@
         if (vol) vol.value = String(Number(userSettings.audioVolume || 1));
         if (autoplay) autoplay.checked = !!userSettings.autoPlayTTS;
 
+        // Show password controls only when user auth is enabled and the user
+        // is authenticated. Call /ui/api/auth/me and hide the password fieldset
+        // when unauthenticated or the endpoint returns 401/403.
+        try {
+          const pwField = document.getElementById('settings_password_fieldset');
+          let showPw = false;
+          try {
+            const r = await fetch('/ui/api/auth/me', { method: 'GET', credentials: 'same-origin' });
+            if (r.ok) {
+              const j = await r.json();
+              showPw = !!j && !!j.authenticated;
+            } else {
+              // If the route returns 401/403, treat as not authenticated
+              showPw = false;
+            }
+          } catch (e) {
+            showPw = false;
+          }
+          if (pwField) pwField.style.display = showPw ? 'block' : 'none';
+        } catch (e) {}
+
         modal.setAttribute('aria-hidden', 'false');
         const close = document.getElementById('settingsClose');
         if (close) close.focus();
