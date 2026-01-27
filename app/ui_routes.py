@@ -665,6 +665,34 @@ async def ui_user_settings_put(req: Request) -> Dict[str, Any]:
     return {"ok": True}
 
 
+@router.post("/ui/api/user/password", include_in_schema=False)
+async def ui_user_change_password(req: Request) -> Dict[str, Any]:
+    _require_ui_access(req)
+    user = _require_user(req)
+    if user is None:
+        raise HTTPException(status_code=401, detail="authentication required")
+    body = await req.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="body must be an object")
+    current = body.get("current")
+    new = body.get("new")
+    if not isinstance(current, str) or not current:
+        raise HTTPException(status_code=400, detail="current password required")
+    if not isinstance(new, str) or not new:
+        raise HTTPException(status_code=400, detail="new password required")
+
+    # Verify current password
+    auth = user_store.authenticate(S.USER_DB_PATH, username=user.username, password=current)
+    if auth is None:
+        raise HTTPException(status_code=401, detail="current password invalid")
+
+    try:
+        user_store.set_password(S.USER_DB_PATH, username=user.username, password=new)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"ok": True}
+
+
 @router.get("/ui/api/conversations", include_in_schema=False)
 async def ui_conversation_list(req: Request) -> Dict[str, Any]:
     _require_ui_access(req)

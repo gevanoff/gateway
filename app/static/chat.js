@@ -340,6 +340,9 @@
       const showTs = document.getElementById('settings_show_timestamps');
       const vol = document.getElementById('settings_audio_volume');
       const autoplay = document.getElementById('settings_autoplay_tts');
+      const curPwd = document.getElementById('settings_current_password');
+      const newPwd = document.getElementById('settings_new_password');
+      const confirmPwd = document.getElementById('settings_confirm_password');
       const newSettings = {
         tts: { voice: select ? select.value : "" },
         ui: { showTimestamps: !!(showTs && showTs.checked) },
@@ -347,6 +350,29 @@
         autoPlayTTS: !!(autoplay && autoplay.checked),
       };
       try {
+        // If user provided password fields, attempt password change first.
+        try {
+          const cur = curPwd ? String(curPwd.value || '') : '';
+          const nw = newPwd ? String(newPwd.value || '') : '';
+          const conf = confirmPwd ? String(confirmPwd.value || '') : '';
+          if (cur || nw || conf) {
+            if (!cur) { alert('Current password is required to change password'); return; }
+            if (!nw) { alert('New password is required'); return; }
+            if (nw !== conf) { alert('New password and confirmation do not match'); return; }
+
+            const pwResp = await fetch('/ui/api/user/password', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ current: cur, new: nw }) });
+            if (!pwResp.ok) {
+              const txt = await pwResp.text();
+              alert('Failed to change password: ' + (txt || pwResp.status));
+              return;
+            }
+            alert('Password changed');
+          }
+        } catch (e) {
+          console.error('change password', e);
+          alert('Failed to change password');
+          return;
+        }
         const put = await fetch('/ui/api/user/settings', { method: 'PUT', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ settings: newSettings }) });
         if (!put.ok) {
           alert('Failed to save settings');
