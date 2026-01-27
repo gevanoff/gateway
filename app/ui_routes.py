@@ -1038,7 +1038,116 @@ async def ui_chat_stream(req: Request):
 
     if not messages:
         raise HTTPException(status_code=400, detail="messages required")
+    
+    # Server-side command handling: if the user sent a single leading slash-command
+    # like `/image`, `/music`, or `/speech`, invoke the appropriate backend and
+    # emit a short SSE update with the backend result before continuing to the
+    # normal chat model routing. This ensures slash-commands always surface the
+    # backend output even if the chat model responds differently.
+    try:
+        if isinstance(message_text, str) and message_text and len(messages) == 1 and (messages[0].role or "") == "user":
+            cmd = message_text.strip()
+            low = cmd.lower()
+            # /image
+            if low == "/image" or low.startswith("/image "):
+                prompt = cmd.replace("/image", "", 1).strip()
+                try:
+                    # Announce backend work to the UI
+                    yield sse({"type": "thinking", "thinking": "Generating image…"})
+                    resp = await generate_images(prompt=prompt or "", size="1024x1024", n=1, model=None, options=None, response_format="url")
+                    url = None
+                    if isinstance(resp, dict):
+                        if isinstance(resp.get("data"), list) and resp["data"]:
+                            first = resp["data"][0]
+                            if isinstance(first, dict) and isinstance(first.get("url"), str) and first.get("url").strip():
+                                url = first.get("url").strip()
+                            elif isinstance(first, dict) and isinstance(first.get("b64_json"), str) and first.get("b64_json").strip():
+                                # save base64 to UI image cache
+                                try:
+                                    url, _, _ = _save_ui_image(b64=first.get("b64_json"), mime_hint=resp.get("_gateway", {}).get("mime", "image/png"))
+                                except Exception:
+                                    url = None
+                    if url:
+                        yield sse({"type": "delta", "delta": f"[Image] {url}"})
+                        # persist to conversation if present
+                        try:
+                            if conversation_id:
+                                if user is None:
+                                    ui_conversations.append_message(conversation_id, {"role": "assistant", "type": "image", "url": url})
+                                else:
+                                    user_store.append_message(S.USER_DB_PATH, user_id=user.id, conversation_id=conversation_id, msg={"role": "assistant", "type": "image", "url": url})
+                        except Exception:
+                            pass
+                    else:
+                        yield sse({"type": "delta", "delta": "[Image] generation returned no usable URL"})
+                except Exception as e:
+                    yield sse({"type": "delta", "delta": f"[Image] generation failed: {type(e).__name__}: {e}"})
 
+            # /music
+            elif low == "/music" or low.startswith("/music "):
+                prompt = cmd.replace("/music", "", 1).strip()
+                try:
+                    yield sse({"type": "thinking", "thinking": "Generating music…"})
+                    from app.music_backend import generate_music
+
+                    out = await generate_music(backend_class=getattr(S, "MUSIC_BACKEND_CLASS", "heartmula_music"), body={"prompt": prompt})
+                    url = out.get("audio_url") if isinstance(out, dict) else None
+                    if url:
+                        yield sse({"type": "delta", "delta": f"[Music] {url}"})
+                        try:
+                            if conversation_id:
+                                if user is None:
+                                    ui_conversations.append_message(conversation_id, {"role": "assistant", "type": "music", "url": url})
+                                else:
+                                    user_store.append_message(S.USER_DB_PATH, user_id=user.id, conversation_id=conversation_id, msg={"role": "assistant", "type": "music", "url": url})
+                        except Exception:
+                            pass
+                    else:
+                        yield sse({"type": "delta", "delta": "[Music] generation returned no audio URL"})
+                except Exception as e:
+                    yield sse({"type": "delta", "delta": f"[Music] generation failed: {type(e).__name__}: {e}"})
+
+            # /speech or /tts
+            elif low == "/speech" or low.startswith("/speech ") or low.startswith("/tts"):
+                prompt = cmd.replace("/speech", "", 1).replace("/tts", "", 1).strip()
+                try:
+                    yield sse({"type": "thinking", "thinking": "Synthesizing speech…"})
+                    backend_class = (getattr(S, "TTS_BACKEND_CLASS", "") or "").strip() or "pocket_tts"
+                    check_backend_ready(backend_class, route_kind="tts")
+                    await check_capability(backend_class, "tts")
+                    admission = get_admission_controller()
+                    await admission.acquire(backend_class, "tts")
+                    try:
+                        from app.tts_backend import generate_tts
+
+                        res = await generate_tts(backend_class=backend_class, body={"text": prompt})
+                    finally:
+                        admission.release(backend_class, "tts")
+
+                    audio_url = None
+                    if isinstance(res, dict):
+                        audio_url = res.get("audio_url")
+                    else:
+                        # TtsResult case handled by ui_api_tts: raw bytes returned as StreamingResponse, so we can't easily produce a URL here.
+                        audio_url = None
+
+                    if audio_url:
+                        yield sse({"type": "delta", "delta": f"[Speech] {audio_url}"})
+                        try:
+                            if conversation_id:
+                                if user is None:
+                                    ui_conversations.append_message(conversation_id, {"role": "assistant", "type": "audio", "url": audio_url})
+                                else:
+                                    user_store.append_message(S.USER_DB_PATH, user_id=user.id, conversation_id=conversation_id, msg={"role": "assistant", "type": "audio", "url": audio_url})
+                        except Exception:
+                            pass
+                    else:
+                        yield sse({"type": "delta", "delta": "[Speech] synthesized audio available in TTS UI or returned inline."})
+                except Exception as e:
+                    yield sse({"type": "delta", "delta": f"[Speech] synthesis failed: {type(e).__name__}: {e}"})
+    except Exception:
+        # best-effort only; do not fail the chat stream on command-handling errors
+        pass
     cc = ChatCompletionRequest(
         model=model,
         messages=messages,
