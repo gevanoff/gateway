@@ -63,14 +63,7 @@
             <select id="model"></select>
             <button id="loadModels" type="button">Load</button>
           </span>
-          <label class="pill" style="cursor:pointer">
-            <input id="autoImage" type="checkbox" />
-            <span class="hint">Auto-detect image requests</span>
-          </label>
-          <label class="pill" style="cursor:pointer">
-            <input id="autoMusic" type="checkbox" />
-            <span class="hint">Auto-detect music requests</span>
-          </label>
+          <!-- Auto-detect toggles removed to simplify UI -->
           <a class="pill" href="/ui/image">Image UI</a>
           <a class="pill" href="/ui/music">Music UI</a>
           <a class="pill" href="/ui/video">Video UI</a>
@@ -98,7 +91,7 @@
             <li><strong>/speech</strong> (or use the Text-to-Speech UI) — synthesize audio via TTS backends. Works: open <a href="/ui/tts">Text-to-speech</a> or use the TTS controls after chat output.</li>
             <li><strong>/video</strong> — video generation UI (placeholder). Status: stub — frontend present at <a href="/ui/video">Video UI</a> but no backend API implemented yet.</li>
           </ul>
-          <div class="hint" style="margin-top:6px">Notes: Auto-detection toggles for images and music are available in the topbar. Chat commands require that the UI is reachable (see <code>UI_IP_ALLOWLIST</code>) and you may need to be authenticated for persisted storage.</div>
+          <div class="hint" style="margin-top:6px">Notes: Chat commands require that the UI is reachable (see <code>UI_IP_ALLOWLIST</code>) and you may need to be authenticated for persisted storage.</div>
         </div>
       </details>
     </main>

@@ -21,7 +21,6 @@
     } catch (e) {}
   }
 
-  const imgPromptEl = $("imgPrompt");
   (() => {
     const $ = (id) => document.getElementById(id);
 
@@ -31,13 +30,12 @@
     const inputEl = $("input");
     const sendEl = $("send");
     const clearEl = $("clear");
-    const autoImageEl = $("autoImage");
 
     /** @type {{role:'user'|'assistant'|'system', content:string}[]} */
     let history = [];
 
     const CONVO_KEY = "gw_ui2_conversation_id";
-    const AUTO_IMAGE_KEY = "gw_ui2_auto_image";
+    
     let conversationId = "";
     let conversationResetting = false;
 
@@ -50,25 +48,7 @@
       return false;
     }
 
-    function loadAutoImageSetting() {
-      if (!autoImageEl) return;
-      const raw = (localStorage.getItem(AUTO_IMAGE_KEY) || "").trim().toLowerCase();
-      if (raw === "1" || raw === "true" || raw === "yes" || raw === "on") {
-        autoImageEl.checked = true;
-        return;
-      }
-      if (raw === "0" || raw === "false" || raw === "no" || raw === "off") {
-        autoImageEl.checked = false;
-        return;
-      }
-      // Default: off (avoid accidental image generation).
-      autoImageEl.checked = false;
-    }
-
-    function saveAutoImageSetting() {
-      if (!autoImageEl) return;
-      localStorage.setItem(AUTO_IMAGE_KEY, autoImageEl.checked ? "1" : "0");
-    }
+    
 
     function escapeHtml(s) {
       return String(s)
@@ -408,39 +388,7 @@
       });
     }
 
-    function isLikelyImageRequest(text) {
-      const s = String(text || "").trim().toLowerCase();
-      if (!s) return false;
-      if (s.startsWith("/image ") || s.startsWith("/img ") || s.startsWith("image:")) return true;
-
-      const hasImageWord = /\b(image|picture|photo|photograph|art|artwork|illustration|drawing|sketch|render|logo|icon|avatar|wallpaper|poster|banner)\b/.test(s);
-      const hasMakeVerb = /\b(generate|create|make|draw|paint|illustrate|render|design)\b/.test(s);
-      if (hasImageWord && hasMakeVerb) return true;
-
-      if (/^(generate|create|make) (me )?(an |a )?(image|picture|photo|illustration|drawing|sketch|logo|icon|avatar|wallpaper|poster|banner)\b/.test(s)) {
-        return true;
-      }
-      if (/^draw (me |us )?(an |a )?\b/.test(s)) {
-        return true;
-      }
-      if (/^illustrate\b/.test(s)) {
-        return true;
-      }
-      return false;
-    }
-
-    function isLikelyMusicRequest(text) {
-      const s = String(text || "").trim().toLowerCase();
-      if (!s) return false;
-      if (s.startsWith("/music ") || s.startsWith("music:") || s.startsWith("/song ")) return true;
-
-      const hasMusicWord = /\b(music|song|tune|melody|track|beat|jam|riff)\b/.test(s);
-      const hasMakeVerb = /\b(generate|create|make|compose|write|produce)\b/.test(s);
-      if (hasMusicWord && hasMakeVerb) return true;
-
-      if (/^(generate|create|compose|make) (me )?(a |an )?\b/.test(s) && /\b(music|song|tune|melody|track)\b/.test(s)) return true;
-      return false;
-    }
+    
 
     async function sendChatMessage(userText) {
       const model = (modelEl.value || "").trim() || "fast";
@@ -834,12 +782,7 @@
           return;
         }
 
-        // Fallback: auto-detect image requests if enabled.
-        if (isLikelyImageRequest(text) && (autoImageEl && autoImageEl.checked)) {
-          await generateImage(text, {});
-          return;
-        }
-
+        
         await sendChatMessage(text);
       }
 
