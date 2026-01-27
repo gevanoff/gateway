@@ -145,7 +145,7 @@
     links.style.justifyContent = "flex-end";
     links.innerHTML = `
       <a href="${url}" target="_blank" rel="noreferrer">Open</a>
-      <a href="#" data-copy="${url}">Copy URL</a>
+      <a href="${url}" download="tts.wav" rel="noopener noreferrer">Download</a>
     `;
 
     wrapper.appendChild(audio);
@@ -164,15 +164,7 @@
       audio.volume = Number(volume.value);
     });
 
-    wrapper.addEventListener("click", (e) => {
-      const a = e.target;
-      if (!(a instanceof HTMLAnchorElement)) return;
-      const copy = a.getAttribute("data-copy");
-      if (!copy) return;
-      e.preventDefault();
-      void navigator.clipboard?.writeText(copy);
-      setStatus("Copied URL to clipboard", false);
-    });
+    // links provide Open and Download actions; no copy handler required.
 
     playerEl.appendChild(wrapper);
   }
