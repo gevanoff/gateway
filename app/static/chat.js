@@ -39,6 +39,7 @@
     const CONVO_KEY = "gw_ui2_conversation_id";
     const AUTO_IMAGE_KEY = "gw_ui2_auto_image";
     let conversationId = "";
+    let conversationResetting = false;
 
     function handle401(resp) {
       if (resp && resp.status === 401) {
@@ -366,12 +367,31 @@
       localStorage.setItem(CONVO_KEY, cid);
     }
 
+    async function resetConversationId(reason) {
+      if (conversationResetting) return;
+      conversationResetting = true;
+      try {
+        localStorage.removeItem(CONVO_KEY);
+        conversationId = "";
+        if (reason) {
+          addMessage({ role: "system", content: reason });
+        }
+        await ensureConversation();
+      } finally {
+        conversationResetting = false;
+      }
+    }
+
     async function loadConversation() {
       if (!conversationId) return;
       const resp = await fetch(`/ui/api/conversations/${encodeURIComponent(conversationId)}`, { method: "GET", credentials: "same-origin" });
       const text = await resp.text();
       if (handle401(resp)) return;
       if (!resp.ok) {
+        if (resp.status === 404) {
+          await resetConversationId("Conversation expired or missing. Starting a new one.");
+          return;
+        }
         addMessage({ role: "system", content: text, meta: `Load convo HTTP ${resp.status}` });
         return;
       }
@@ -452,12 +472,19 @@
       setBusy(true);
 
       try {
-        const resp = await fetch("/ui/api/chat_stream", {
-          method: "POST",
-          credentials: "same-origin",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ model, conversation_id: conversationId, message: userText }),
-        });
+        const sendRequest = () =>
+          fetch("/ui/api/chat_stream", {
+            method: "POST",
+            credentials: "same-origin",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ model, conversation_id: conversationId, message: userText }),
+          });
+
+        let resp = await sendRequest();
+        if (resp.status === 404 && conversationId) {
+          await resetConversationId("Conversation expired or missing. Retrying with a new one.");
+          resp = await sendRequest();
+        }
 
         if (handle401(resp)) return;
 
