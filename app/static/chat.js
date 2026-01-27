@@ -100,6 +100,18 @@
       const metaEl = document.createElement("div");
       metaEl.className = "meta";
       metaEl.textContent = meta || (role === "user" ? "You" : role === "assistant" ? "Assistant" : "System");
+      // Optionally show timestamp
+      try {
+        if (userSettings && userSettings.showTimestamps) {
+          const ts = document.createElement('span');
+          ts.className = 'ts';
+          ts.style.marginLeft = '8px';
+          ts.style.color = '#93a4ba';
+          ts.style.fontSize = '11px';
+          ts.textContent = new Date().toLocaleTimeString();
+          metaEl.appendChild(ts);
+        }
+      } catch (e) {}
 
       const contentEl = document.createElement("div");
       contentEl.className = "content";
@@ -168,6 +180,12 @@
       wrap.appendChild(audio);
       wrap.appendChild(controls);
 
+      // Apply user-configured audio volume and autoplay
+      try {
+        audio.volume = typeof userSettings.audioVolume === 'number' ? Number(userSettings.audioVolume) : audio.volume;
+        audio.autoplay = !!userSettings.autoPlayTTS;
+      } catch (e) {}
+
       audio.addEventListener("loadedmetadata", () => {
         if (Number.isFinite(audio.duration)) {
           totalEl.textContent = formatTime(audio.duration);
@@ -181,6 +199,14 @@
       volume.addEventListener("input", () => {
         audio.volume = Number(volume.value);
       });
+
+      // initialize volume control from user settings if present
+      try {
+        if (typeof userSettings.audioVolume === 'number') {
+          volume.value = String(Number(userSettings.audioVolume));
+          audio.volume = Number(userSettings.audioVolume);
+        }
+      } catch (e) {}
 
       return wrap;
     }
@@ -237,22 +263,105 @@
       } catch (e) {}
     }
 
-    async function openSettings() {
-      // Simple settings pane: fetch current settings and show a prompt editor.
+    // User settings management
+    let userSettings = { ttsVoice: "", showTimestamps: false, audioVolume: 1.0, autoPlayTTS: false };
+
+    async function loadUserSettings() {
       try {
         const resp = await fetch('/ui/api/user/settings', { method: 'GET', credentials: 'same-origin' });
         if (!resp.ok) return;
         const payload = await resp.json();
-        const settings = payload?.settings || {};
-        const raw = JSON.stringify(settings, null, 2);
-        const edited = prompt('Edit user settings (JSON):', raw);
-        if (edited === null) return;
-        let parsed;
-        try { parsed = JSON.parse(edited); } catch (e) { alert('Invalid JSON'); return; }
-        const put = await fetch('/ui/api/user/settings', { method: 'PUT', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ settings: parsed }) });
-        if (!put.ok) alert('Failed to save settings');
+        const s = payload?.settings || {};
+        userSettings = {
+          ttsVoice: s.tts?.voice || s.tts_voice || s.ttsVoice || "",
+          showTimestamps: !!(s.ui && s.ui.showTimestamps || s.showTimestamps),
+          audioVolume: typeof s.audioVolume === 'number' ? s.audioVolume : (s.audio && typeof s.audio.volume === 'number' ? s.audio.volume : (s.audioVolume || 1.0)),
+          autoPlayTTS: !!(s.audio && s.audio.autoPlayTTS || s.autoPlayTTS),
+        };
+        applyUserSettingsToUi();
       } catch (e) {
-        console.error(e);
+        console.error('loadUserSettings', e);
+      }
+    }
+
+    function applyUserSettingsToUi() {
+      // Nothing heavy for now; audio players read userSettings when created.
+      // If timestamps are enabled, existing messages won't be backfilled.
+    }
+
+    function openSettings() {
+      const modal = document.getElementById('settingsModal');
+      if (!modal) return;
+      // populate form
+      (async () => {
+        await loadUserSettings();
+        const select = document.getElementById('settings_tts_voice');
+        const showTs = document.getElementById('settings_show_timestamps');
+        const vol = document.getElementById('settings_audio_volume');
+        const autoplay = document.getElementById('settings_autoplay_tts');
+        // populate voice list if available from TTS voices endpoint
+        try {
+          const r = await fetch('/ui/api/tts/voices', { method: 'GET', credentials: 'same-origin' });
+          if (r.ok) {
+            const voices = await r.json();
+            if (Array.isArray(voices) && select) {
+              select.innerHTML = '<option value="">(default)</option>';
+              for (const v of voices) {
+                try {
+                  const opt = document.createElement('option');
+                  opt.value = String(v);
+                  opt.textContent = String(v);
+                  select.appendChild(opt);
+                } catch (e) {}
+              }
+            }
+          }
+        } catch (e) {}
+
+        if (select) select.value = userSettings.ttsVoice || "";
+        if (showTs) showTs.checked = !!userSettings.showTimestamps;
+        if (vol) vol.value = String(Number(userSettings.audioVolume || 1));
+        if (autoplay) autoplay.checked = !!userSettings.autoPlayTTS;
+
+        modal.setAttribute('aria-hidden', 'false');
+        const close = document.getElementById('settingsClose');
+        if (close) close.focus();
+      })();
+    }
+
+    function closeSettings() {
+      const modal = document.getElementById('settingsModal');
+      if (!modal) return;
+      modal.setAttribute('aria-hidden', 'true');
+    }
+
+    async function saveSettingsFromModal() {
+      const select = document.getElementById('settings_tts_voice');
+      const showTs = document.getElementById('settings_show_timestamps');
+      const vol = document.getElementById('settings_audio_volume');
+      const autoplay = document.getElementById('settings_autoplay_tts');
+      const newSettings = {
+        tts: { voice: select ? select.value : "" },
+        ui: { showTimestamps: !!(showTs && showTs.checked) },
+        audioVolume: vol ? Number(vol.value) : 1.0,
+        autoPlayTTS: !!(autoplay && autoplay.checked),
+      };
+      try {
+        const put = await fetch('/ui/api/user/settings', { method: 'PUT', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ settings: newSettings }) });
+        if (!put.ok) {
+          alert('Failed to save settings');
+          return;
+        }
+        // update local copy
+        userSettings.ttsVoice = newSettings.tts.voice || "";
+        userSettings.showTimestamps = !!newSettings.ui.showTimestamps;
+        userSettings.audioVolume = Number(newSettings.audioVolume || 1.0);
+        userSettings.autoPlayTTS = !!newSettings.autoPlayTTS;
+        applyUserSettingsToUi();
+        closeSettings();
+      } catch (e) {
+        console.error('saveSettings', e);
+        alert('Failed to save settings');
       }
     }
 
@@ -835,6 +944,13 @@
       if (clearChatEl) clearChatEl.addEventListener('click', () => clearChatUI());
       if (resetSessionEl) resetSessionEl.addEventListener('click', () => resetSession());
       if (settingsBtn) settingsBtn.addEventListener('click', () => openSettings());
+      // modal controls
+      const settingsCancel = document.getElementById('settings_cancel');
+      const settingsSave = document.getElementById('settings_save');
+      const settingsClose = document.getElementById('settingsClose');
+      if (settingsCancel) settingsCancel.addEventListener('click', () => closeSettings());
+      if (settingsClose) settingsClose.addEventListener('click', () => closeSettings());
+      if (settingsSave) settingsSave.addEventListener('click', () => saveSettingsFromModal());
       if (inputEl) {
         inputEl.addEventListener('keydown', (e) => {
           if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
