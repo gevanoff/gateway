@@ -445,6 +445,25 @@
     async function sendChatMessage(userText) {
       const model = (modelEl.value || "").trim() || "fast";
 
+      // Intercept explicit slash-commands here as a safety net so any caller
+      // of sendChatMessage will route commands to the correct backend.
+      const lower = String(userText || "").trim().toLowerCase();
+      if (lower === '/image' || lower.startsWith('/image ')) {
+        const prompt = String(userText || "").replace(/^\/image\s*/i, '').trim();
+        await generateImage(prompt || '', {});
+        return;
+      }
+      if (lower === '/music' || lower.startsWith('/music ')) {
+        const body = { style: String(userText || "").replace(/^\/music\s*/i, '').trim() };
+        await generateMusic(body);
+        return;
+      }
+      if (lower === '/speech' || lower.startsWith('/speech ') || lower.startsWith('/tts ')) {
+        const prompt = String(userText || "").replace(/^\/(speech|tts)\s*/i, '').trim();
+        await generateSpeech(prompt || '');
+        return;
+      }
+
       history.push({ role: "user", content: userText });
       addMessage({ role: "user", content: userText });
 
