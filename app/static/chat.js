@@ -912,7 +912,7 @@
       if (!chatEl) return;
       loadAutoImageSetting();
       void loadModels();
-      (async () => { await ensureConversation(); await loadConversation(); })();
+      (async () => { await loadUserSettings(); await ensureConversation(); await loadConversation(); })();
       async function handleSendClick() {
         const text = (inputEl.value || '').trim();
         if (!text) return;
