@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Dict, Literal, Optional
 
 import httpx
+import subprocess
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 from fastapi.responses import HTMLResponse
@@ -438,15 +439,40 @@ async def ui_api_tts_voices(req: Request):
         raise HTTPException(status_code=404, detail="tts backend not configured")
 
     # Special-case local pocket_tts which does not expose a voice-listing endpoint.
-    # If pocket_tts is available at runtime and defines PREDEFINED_VOICES, return that.
-    try:
-        if backend_class and "pocket" in backend_class:
+    # If pocket_tts is importable in-process and defines PREDEFINED_VOICES, return that.
+    if backend_class and "pocket" in backend_class:
+        try:
             from pocket_tts.utils.utils import PREDEFINED_VOICES  # type: ignore
             if PREDEFINED_VOICES:
-                return JSONResponse(list(PREDEFINED_VOICES))
-    except Exception:
-        # Import failure or missing symbol — fall back to probing HTTP endpoints below.
-        pass
+                return JSONResponse(list(PREDEFINED_VOICES.keys()) if hasattr(PREDEFINED_VOICES, 'keys') else list(PREDEFINED_VOICES))
+        except Exception:
+            # If import fails in this Python environment, try invoking a known pocket-tts python
+            # executable (common path used on deployments) to extract PREDEFINED_VOICES.
+            candidates = []
+            # allow explicit override via settings or environment
+            try:
+                p = (getattr(S, "POCKET_TTS_PYTHON", None) or os.environ.get("POCKET_TTS_PYTHON") or "").strip()
+                if p:
+                    candidates.append(p)
+            except Exception:
+                pass
+            # common deployment path
+            candidates.extend(["/var/lib/pocket-tts/env/bin/python", "/var/lib/pocket-tts/venv/bin/python"])
+
+            for py in candidates:
+                try:
+                    args = [py, "-c", "import json; from pocket_tts.utils.utils import PREDEFINED_VOICES; print(json.dumps(list(PREDEFINED_VOICES.keys()) if hasattr(PREDEFINED_VOICES, 'keys') else list(PREDEFINED_VOICES)))"]
+                    proc = subprocess.run(args, capture_output=True, text=True, timeout=5)
+                    if proc.returncode == 0 and proc.stdout:
+                        try:
+                            payload = json.loads(proc.stdout.strip())
+                            if isinstance(payload, list):
+                                return JSONResponse(payload)
+                        except Exception:
+                            # ignore parse errors and continue
+                            pass
+                except Exception:
+                    continue
 
     async with httpx.AsyncClient(timeout=10) as client:
         last_err = None
