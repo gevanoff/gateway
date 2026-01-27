@@ -143,10 +143,45 @@
     links.style.display = "flex";
     links.style.gap = "12px";
     links.style.justifyContent = "flex-end";
-    links.innerHTML = `
-      <a href="${url}" target="_blank" rel="noreferrer">Open</a>
-      <a href="${url}" download="tts.wav" rel="noopener noreferrer">Download</a>
-    `;
+
+    const makeSafe = (s) => {
+      try {
+        return String(s || "").replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 48) || "tts";
+      } catch (e) {
+        return "tts";
+      }
+    };
+
+    const openA = document.createElement("a");
+    openA.href = url;
+    openA.target = "_blank";
+    openA.rel = "noreferrer";
+    openA.textContent = "Open";
+
+    const downloadA = document.createElement("a");
+    downloadA.href = url;
+    downloadA.rel = "noopener noreferrer";
+    downloadA.textContent = "Download";
+
+    // Build a dynamic filename: <voice>-<uniq>.<ext>
+    try {
+      const voiceName = makeSafe((voiceEl && voiceEl.value) ? voiceEl.value : "tts");
+      const uniq = Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
+      let ext = "wav";
+      try {
+        const m = String(url || "").split("?")[0].split(".");
+        if (m.length > 1) {
+          const maybe = m[m.length - 1].toLowerCase();
+          if (/^[a-z0-9]{1,6}$/.test(maybe)) ext = maybe;
+        }
+      } catch (e) {}
+      downloadA.download = `${voiceName}-${uniq}.${ext}`;
+    } catch (e) {
+      // ignore and let browser default to the href name
+    }
+
+    links.appendChild(openA);
+    links.appendChild(downloadA);
 
     wrapper.appendChild(audio);
     wrapper.appendChild(controls);
