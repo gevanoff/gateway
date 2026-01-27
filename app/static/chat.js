@@ -30,6 +30,9 @@
     const inputEl = $("input");
     const sendEl = $("send");
     const clearEl = $("clear");
+    const clearChatEl = $("clearChat");
+    const resetSessionEl = $("resetSession");
+    const settingsBtn = $("settingsBtn");
 
     /** @type {{role:'user'|'assistant'|'system', content:string}[]} */
     let history = [];
@@ -209,6 +212,48 @@
       if (m.model) metaBits.push(`model=${m.model}`);
       if (m.reason) metaBits.push(`reason=${m.reason}`);
       addMessage({ role, content, meta: metaBits.length ? metaBits.join(" • ") : undefined });
+    }
+
+    function clearChatUI() {
+      if (!chatEl) return;
+      chatEl.innerHTML = "";
+    }
+
+    async function resetSession() {
+      // remove local conversation id, clear UI, and create a new conversation
+      try {
+        localStorage.removeItem(CONVO_KEY);
+      } catch (e) {}
+      clearChatUI();
+      try {
+        const resp = await fetch("/ui/api/conversations/new", { method: "POST", credentials: "same-origin" });
+        if (resp.ok) {
+          const payload = await resp.json();
+          if (payload && typeof payload.conversation_id === 'string') {
+            conversationId = payload.conversation_id;
+            try { localStorage.setItem(CONVO_KEY, conversationId); } catch (e) {}
+          }
+        }
+      } catch (e) {}
+    }
+
+    async function openSettings() {
+      // Simple settings pane: fetch current settings and show a prompt editor.
+      try {
+        const resp = await fetch('/ui/api/user/settings', { method: 'GET', credentials: 'same-origin' });
+        if (!resp.ok) return;
+        const payload = await resp.json();
+        const settings = payload?.settings || {};
+        const raw = JSON.stringify(settings, null, 2);
+        const edited = prompt('Edit user settings (JSON):', raw);
+        if (edited === null) return;
+        let parsed;
+        try { parsed = JSON.parse(edited); } catch (e) { alert('Invalid JSON'); return; }
+        const put = await fetch('/ui/api/user/settings', { method: 'PUT', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ settings: parsed }) });
+        if (!put.ok) alert('Failed to save settings');
+      } catch (e) {
+        console.error(e);
+      }
     }
 
     function setBusy(busy) {
@@ -787,6 +832,9 @@
       }
 
       if (sendEl) sendEl.addEventListener('click', () => void handleSendClick());
+      if (clearChatEl) clearChatEl.addEventListener('click', () => clearChatUI());
+      if (resetSessionEl) resetSessionEl.addEventListener('click', () => resetSession());
+      if (settingsBtn) settingsBtn.addEventListener('click', () => openSettings());
       if (inputEl) {
         inputEl.addEventListener('keydown', (e) => {
           if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
