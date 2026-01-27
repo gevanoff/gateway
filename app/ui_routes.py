@@ -415,7 +415,11 @@ async def ui_api_tts(req: Request):
 
     if result.audio is None:
         raise HTTPException(status_code=502, detail="tts backend returned no audio")
-    return StreamingResponse(result.audio, media_type=result.content_type, headers=headers)
+    # `result.audio` is raw bytes. Iterating a `bytes` yields ints which
+    # Starlette's `stream_response` later tries to `.encode()` on strings and
+    # will fail for ints. Wrap the bytes in an iterator that yields a single
+    # bytes chunk so StreamingResponse sees a bytes-like chunk.
+    return StreamingResponse(iter([result.audio]), media_type=result.content_type, headers=headers)
 
 
 @router.post("/ui/api/auth/login", include_in_schema=False)
