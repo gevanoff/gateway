@@ -910,7 +910,6 @@
 
     document.addEventListener('DOMContentLoaded', () => {
       if (!chatEl) return;
-      loadAutoImageSetting();
       void loadModels();
       (async () => { await loadUserSettings(); await ensureConversation(); await loadConversation(); })();
       async function handleSendClick() {
