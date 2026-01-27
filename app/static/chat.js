@@ -614,19 +614,45 @@
 
     async function generateMusic(body) {
       try {
-        const resp = await fetch("/ui/api/music", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+        // Show assistant placeholder with thinking while music is generated
+        const assistant = addMessage({ role: "assistant", content: "", meta: "Assistant" });
+        assistant.contentEl.textContent = "";
+        const thinkingLine = document.createElement("div");
+        thinkingLine.className = "thinking-line";
+        thinkingLine.textContent = "Generating music…";
+        assistant.contentEl.appendChild(thinkingLine);
+
+        const resp = await fetch("/ui/api/music", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
         const text = await resp.text();
         if (handle401(resp)) return;
         if (!resp.ok) {
-          addMessage({ role: "system", content: text, meta: `Music HTTP ${resp.status}` });
+          assistant.contentEl.textContent = text;
+          assistant.metaEl.textContent = `Music HTTP ${resp.status}`;
           return;
         }
+        let payload;
         try {
-          const payload = JSON.parse(text);
-          addMessage({ role: "system", content: `Music response: ${JSON.stringify(payload)}` });
+          payload = JSON.parse(text);
         } catch {
-          addMessage({ role: "system", content: text });
+          assistant.contentEl.textContent = text;
+          return;
         }
+
+        // If the backend provided an audio URL, show inline audio player.
+        const url = payload?.audio_url || (payload?.data && payload.data[0] && payload.data[0].url);
+        if (typeof url === "string" && url.trim()) {
+          const player = createAudioPlayer(url.trim());
+          assistant.contentEl.innerHTML = "";
+          assistant.contentEl.appendChild(player);
+          return;
+        }
+
+        assistant.contentEl.textContent = `Music response: ${JSON.stringify(payload)}`;
       } catch (e) {
         addMessage({ role: "system", content: String(e) });
       }
@@ -635,32 +661,106 @@
     async function generateImage(prompt, image_request) {
       const body = { prompt, ...image_request };
       try {
+        // Show assistant placeholder with thinking while image is generated
+        const assistant = addMessage({ role: "assistant", content: "", meta: "Assistant" });
+        assistant.contentEl.textContent = "";
+        const thinkingLine = document.createElement("div");
+        thinkingLine.className = "thinking-line";
+        thinkingLine.textContent = "Generating image…";
+        assistant.contentEl.appendChild(thinkingLine);
+
         const resp = await fetch("/ui/api/image", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
         const text = await resp.text();
         if (handle401(resp)) return;
         if (!resp.ok) {
-          addMessage({ role: "system", content: text, meta: `Image HTTP ${resp.status}` });
+          assistant.contentEl.textContent = text;
+          assistant.metaEl.textContent = `Image HTTP ${resp.status}`;
           return;
         }
         let payload;
         try {
           payload = JSON.parse(text);
         } catch {
-          addMessage({ role: "system", content: text, meta: "Image OK (non-JSON)" });
+          assistant.contentEl.textContent = text;
+          assistant.metaEl.textContent = "Image OK (non-JSON)";
           return;
         }
         const b64 = payload?.data?.[0]?.b64_json;
         const url = payload?.data?.[0]?.url;
         if (typeof url === "string" && url.trim()) {
-          addMessage({ role: "assistant", html: `<img class="gen" src="${escapeHtml(url.trim())}" alt="generated" />` });
+          assistant.contentEl.innerHTML = `<img class="gen" src="${escapeHtml(url.trim())}" alt="generated" />`;
           return;
         }
         if (typeof b64 === "string" && b64.trim()) {
           const src = b64.trim().startsWith("data:") ? b64.trim() : `data:${payload?._gateway?.mime||'image/png'};base64,${b64.trim()}`;
-          addMessage({ role: "assistant", html: `<img class="gen" src="${escapeHtml(src)}" alt="generated" />` });
+          assistant.contentEl.innerHTML = `<img class="gen" src="${escapeHtml(src)}" alt="generated" />`;
           return;
         }
-        addMessage({ role: "system", content: JSON.stringify(payload, null, 2) });
+        assistant.contentEl.textContent = JSON.stringify(payload, null, 2);
+      } catch (e) {
+        addMessage({ role: "system", content: String(e) });
+      }
+    }
+
+    async function generateSpeech(prompt) {
+      if (!prompt) return;
+      try {
+        const assistant = addMessage({ role: "assistant", content: "", meta: "Assistant" });
+        assistant.contentEl.textContent = "";
+        const thinkingLine = document.createElement("div");
+        thinkingLine.className = "thinking-line";
+        thinkingLine.textContent = "Synthesizing speech…";
+        assistant.contentEl.appendChild(thinkingLine);
+
+        const resp = await fetch("/ui/api/tts", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: prompt }),
+        });
+
+        if (handle401(resp)) return;
+        if (!resp.ok) {
+          const txt = await resp.text();
+          assistant.contentEl.textContent = `TTS HTTP ${resp.status}: ${txt}`;
+          return;
+        }
+
+        const contentType = resp.headers.get("content-type") || "";
+        let url = "";
+        if (contentType.includes("application/json")) {
+          const payload = await resp.json();
+          if (payload?.audio_url) {
+            url = String(payload.audio_url || "").trim();
+          } else {
+            const raw = payload?.audio_base64 || payload?.audio || payload?.audio_data;
+            if (raw) {
+              let b64 = String(raw || "");
+              if (b64.startsWith("data:")) {
+                url = b64;
+              } else {
+                const binary = atob(b64);
+                const len = binary.length;
+                const bytes = new Uint8Array(len);
+                for (let i = 0; i < len; i += 1) bytes[i] = binary.charCodeAt(i);
+                const blob = new Blob([bytes], { type: payload?.content_type || "audio/wav" });
+                url = URL.createObjectURL(blob);
+              }
+            }
+          }
+        } else {
+          const blob = await resp.blob();
+          url = URL.createObjectURL(blob);
+        }
+
+        if (url) {
+          const player = createAudioPlayer(url);
+          assistant.contentEl.innerHTML = "";
+          assistant.contentEl.appendChild(player);
+          return;
+        }
+
+        assistant.contentEl.textContent = "No audio returned from TTS.";
       } catch (e) {
         addMessage({ role: "system", content: String(e) });
       }
@@ -671,16 +771,47 @@
       loadAutoImageSetting();
       void loadModels();
       (async () => { await ensureConversation(); await loadConversation(); })();
-      if (sendEl) sendEl.addEventListener('click', async () => {
+      async function handleSendClick() {
         const text = (inputEl.value || '').trim();
         if (!text) return;
         inputEl.value = '';
+
+        // Explicit command routing takes precedence.
+        const lower = text.trim().toLowerCase();
+        if (lower === '/image' || lower.startsWith('/image ')) {
+          const prompt = text.replace(/^\/image\s*/i, '').trim();
+          await generateImage(prompt || '', {});
+          return;
+        }
+        if (lower === '/music' || lower.startsWith('/music ')) {
+          const body = { style: text.replace(/^\/music\s*/i, '').trim() };
+          await generateMusic(body);
+          return;
+        }
+        if (lower === '/speech' || lower.startsWith('/speech ') || lower.startsWith('/tts ')) {
+          const prompt = text.replace(/^\/(speech|tts)\s*/i, '').trim();
+          await generateSpeech(prompt || '');
+          return;
+        }
+
+        // Fallback: auto-detect image requests if enabled.
         if (isLikelyImageRequest(text) && (autoImageEl && autoImageEl.checked)) {
           await generateImage(text, {});
           return;
         }
+
         await sendChatMessage(text);
-      });
+      }
+
+      if (sendEl) sendEl.addEventListener('click', () => void handleSendClick());
+      if (inputEl) {
+        inputEl.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
+            e.preventDefault();
+            void handleSendClick();
+          }
+        });
+      }
       if (clearEl) clearEl.addEventListener('click', () => { if (inputEl) inputEl.value = ''; });
     });
   })();
