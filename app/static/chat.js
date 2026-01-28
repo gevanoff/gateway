@@ -109,7 +109,7 @@
     function renderBackendStatus(data) {
       if (!backendStatusList) return;
       backendStatusList.innerHTML = "";
-      if (!data || !Array.isArray(data.backends) || data.backends.length === 0) {
+      if (!data || !Array.isArray(data.backends)) {
         const empty = document.createElement("div");
         empty.className = "status-empty";
         empty.textContent = "No backend status available.";
@@ -117,7 +117,27 @@
         return;
       }
 
+      const backendGroups = [
+        { title: "Core", backends: ["ollama", "local_mlx"] },
+        { title: "Images", backends: ["gpu_fast", "gpu_heavy"] },
+        { title: "TTS", backends: ["pocket_tts", "luxtts", "qwen3_tts"] },
+        { title: "Music", backends: ["heartmula_music"] },
+        { title: "Video", backends: ["followyourcanvas", "skyreels-v2"] },
+      ];
+
+      const backendLabels = {
+        gpu_fast: "SDXL-Turbo",
+        gpu_heavy: "InvokeAI",
+      };
+
+      const backendMap = new Map();
       data.backends.forEach((backend) => {
+        backendMap.set(backend.backend_class, backend);
+      });
+
+      const used = new Set();
+
+      const renderBackendRow = (backend, { displayName, missing } = {}) => {
         const row = document.createElement("div");
         row.className = "status-row";
 
@@ -126,33 +146,64 @@
 
         const name = document.createElement("div");
         name.className = "status-name";
-        name.textContent = backend.backend_class || "unknown";
+        const resolvedName = displayName || backend.backend_class || "unknown";
+        name.textContent = resolvedName;
+        if (backend.backend_class && displayName && displayName !== backend.backend_class) {
+          const alias = document.createElement("span");
+          alias.className = "status-name-alias";
+          alias.textContent = ` (${backend.backend_class})`;
+          name.appendChild(alias);
+        }
         header.appendChild(name);
 
         const badges = document.createElement("div");
         badges.className = "status-badges";
 
-        const healthy = document.createElement("span");
-        const isHealthy = backend.healthy === true;
-        healthy.className = `status-badge ${isHealthy ? "ok" : backend.healthy === false ? "bad" : "warn"}`;
-        healthy.textContent = backend.healthy === undefined ? "Health unknown" : isHealthy ? "Healthy" : "Unhealthy";
-        badges.appendChild(healthy);
+        if (missing) {
+          const missingBadge = document.createElement("span");
+          missingBadge.className = "status-badge warn";
+          missingBadge.textContent = "Not configured";
+          badges.appendChild(missingBadge);
+        } else {
+          const healthy = document.createElement("span");
+          const isHealthy = backend.healthy === true;
+          healthy.className = `status-badge ${isHealthy ? "ok" : backend.healthy === false ? "bad" : "warn"}`;
+          healthy.textContent =
+            backend.healthy === undefined ? "Health unknown" : isHealthy ? "Healthy" : "Unhealthy";
+          badges.appendChild(healthy);
 
-        const ready = document.createElement("span");
-        const isReady = backend.ready === true;
-        ready.className = `status-badge ${isReady ? "ok" : backend.ready === false ? "bad" : "warn"}`;
-        ready.textContent = backend.ready === undefined ? "Readiness unknown" : isReady ? "Ready" : "Not ready";
-        badges.appendChild(ready);
+          const ready = document.createElement("span");
+          const isReady = backend.ready === true;
+          ready.className = `status-badge ${isReady ? "ok" : backend.ready === false ? "bad" : "warn"}`;
+          ready.textContent = backend.ready === undefined ? "Readiness unknown" : isReady ? "Ready" : "Not ready";
+          badges.appendChild(ready);
+        }
 
         header.appendChild(badges);
         row.appendChild(header);
 
         const detail = document.createElement("div");
         detail.className = "status-detail";
-        const capabilities = Array.isArray(backend.capabilities) ? backend.capabilities.join(", ") : "unknown";
-        const lastCheck = backend.last_check ? formatTimestamp(backend.last_check) : "--";
-        detail.textContent = `Capabilities: ${capabilities} • Last check: ${lastCheck}`;
+        if (missing) {
+          detail.textContent = "Not configured in the backend registry.";
+        } else {
+          const capabilities = Array.isArray(backend.capabilities) ? backend.capabilities.join(", ") : "unknown";
+          const lastCheck = backend.last_check ? formatTimestamp(backend.last_check) : "--";
+          detail.textContent = `Capabilities: ${capabilities} • Last check: ${lastCheck}`;
+        }
         row.appendChild(detail);
+
+        const aliasEntries = Array.isArray(backend.aliases) ? backend.aliases : [];
+        if (aliasEntries.length > 0) {
+          const aliasDetail = document.createElement("div");
+          aliasDetail.className = "status-aliases";
+          const aliasText = aliasEntries
+            .map((alias) => `${alias.name} → ${alias.target}`)
+            .filter(Boolean)
+            .join(", ");
+          aliasDetail.textContent = `Aliases: ${aliasText}`;
+          row.appendChild(aliasDetail);
+        }
 
         if (backend.error) {
           const err = document.createElement("div");
@@ -161,8 +212,39 @@
           row.appendChild(err);
         }
 
-        backendStatusList.appendChild(row);
+        return row;
+      };
+
+      const renderGroup = (title, backendKeys) => {
+        const group = document.createElement("div");
+        group.className = "status-group";
+        const heading = document.createElement("div");
+        heading.className = "status-group-title";
+        heading.textContent = title;
+        group.appendChild(heading);
+
+        const list = document.createElement("div");
+        list.className = "status-group-list";
+        backendKeys.forEach((backendKey) => {
+          const backend = backendMap.get(backendKey);
+          const displayName = backendLabels[backendKey] || backendKey;
+          list.appendChild(renderBackendRow(backend || { backend_class: backendKey }, { displayName, missing: !backend }));
+          if (backend) used.add(backendKey);
+        });
+        group.appendChild(list);
+        backendStatusList.appendChild(group);
+      };
+
+      backendGroups.forEach((group) => {
+        renderGroup(group.title, group.backends);
       });
+
+      const extraBackends = data.backends
+        .map((backend) => backend.backend_class)
+        .filter((backendClass) => backendClass && !used.has(backendClass));
+      if (extraBackends.length > 0) {
+        renderGroup("Other", extraBackends);
+      }
     }
 
     async function loadBackendStatus() {
