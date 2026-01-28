@@ -84,6 +84,16 @@
             <input id="promptAudio" type="file" accept="audio/*" />
           </label>
           <label>
+            <span>Record Sample</span>
+            <div class="row">
+              <button id="recordAudio" type="button">Record</button>
+              <button id="stopRecording" type="button" disabled>Stop</button>
+              <button id="clearRecording" type="button" disabled>Clear</button>
+            </div>
+            <div id="recordStatus" class="hint">No recording yet.</div>
+          </label>
+          <div id="recordPlayer" class="audio-card"></div>
+          <label>
             <span>Saved Voice</span>
             <select id="savedVoice">
               <option value="">(none)</option>
