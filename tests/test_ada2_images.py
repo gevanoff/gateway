@@ -20,7 +20,7 @@ from typing import Any, Dict
 import httpx
 import pytest
 
-from app.backends import BackendRegistry, get_backends
+from app.backends import BackendRegistry, get_registry
 from app.config import S, logger
 from app.health_checker import HealthChecker, get_health_checker
 
@@ -344,7 +344,7 @@ async def test_nexa_not_used_for_images(client):
     """Verify local_mlx (Nexa) is never used for image generation."""
     
     # Check backends config
-    backends = get_backends()
+    backends = get_registry()
     local_mlx = backends.get_backend("local_mlx")
     
     # local_mlx should NOT have images capability
