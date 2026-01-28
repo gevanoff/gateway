@@ -14,12 +14,51 @@ from app.streaming import ollama_ndjson_to_openai_sse, passthrough_sse
 
 
 async def call_mlx_openai(req: ChatCompletionRequest) -> Dict[str, Any]:
+    def _normalize_messages_for_mlx(msgs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        out: List[Dict[str, Any]] = []
+        last_role: str | None = None
+        for m in msgs:
+            role = (m.get("role") or "").strip()
+            # MLX expects strict user/assistant alternation; convert system->user
+            if role == "system":
+                role = "user"
+
+            # Normalize content to string for safe merging
+            content = m.get("content")
+            if content is None:
+                content_str = ""
+            elif isinstance(content, str):
+                content_str = content
+            else:
+                try:
+                    content_str = json.dumps(content, ensure_ascii=False)
+                except Exception:
+                    content_str = str(content)
+
+            if last_role is not None and last_role == role and out:
+                # Merge consecutive messages of same role to enforce alternation
+                prev = out[-1]
+                prev_content = prev.get("content") or ""
+                if not isinstance(prev_content, str):
+                    try:
+                        prev_content = json.dumps(prev_content, ensure_ascii=False)
+                    except Exception:
+                        prev_content = str(prev_content)
+                # Join with newline to preserve separation
+                prev["content"] = prev_content + "\n" + content_str
+            else:
+                out.append({"role": role, "content": content_str})
+                last_role = role
+        return out
+
+    payload = req.model_dump(exclude_none=True)
+    # Normalize messages to satisfy MLX role alternation constraints
+    if "messages" in payload and isinstance(payload["messages"], list):
+        payload["messages"] = _normalize_messages_for_mlx(payload["messages"])
+
     async with _httpx_client(timeout=600) as client:
         try:
-            r = await client.post(
-                f"{S.MLX_BASE_URL}/chat/completions",
-                json=req.model_dump(exclude_none=True),
-            )
+            r = await client.post(f"{S.MLX_BASE_URL}/chat/completions", json=payload)
             r.raise_for_status()
             return r.json()
         except httpx.HTTPStatusError as e:
@@ -121,6 +160,43 @@ async def embed_text_for_memory(text: str) -> list[float]:
 
 
 async def stream_mlx_openai_chat(payload: Dict[str, Any]) -> AsyncIterator[bytes]:
+    def _normalize_messages_for_mlx(msgs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        out: List[Dict[str, Any]] = []
+        last_role: str | None = None
+        for m in msgs:
+            role = (m.get("role") or "").strip()
+            if role == "system":
+                role = "user"
+            content = m.get("content")
+            if content is None:
+                content_str = ""
+            elif isinstance(content, str):
+                content_str = content
+            else:
+                try:
+                    content_str = json.dumps(content, ensure_ascii=False)
+                except Exception:
+                    content_str = str(content)
+
+            if last_role is not None and last_role == role and out:
+                prev = out[-1]
+                prev_content = prev.get("content") or ""
+                if not isinstance(prev_content, str):
+                    try:
+                        prev_content = json.dumps(prev_content, ensure_ascii=False)
+                    except Exception:
+                        prev_content = str(prev_content)
+                prev["content"] = prev_content + "\n" + content_str
+            else:
+                out.append({"role": role, "content": content_str})
+                last_role = role
+        return out
+
+    # Normalize messages in-place if present
+    if "messages" in payload and isinstance(payload["messages"], list):
+        payload = dict(payload)
+        payload["messages"] = _normalize_messages_for_mlx(payload["messages"])
+
     async with _httpx_client(timeout=None) as client:
         try:
             async with client.stream(
