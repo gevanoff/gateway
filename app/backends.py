@@ -117,6 +117,8 @@ class AdmissionController:
         self.registry = registry
         # Semaphores keyed by (backend_class, route_kind)
         self._semaphores: Dict[tuple[str, RouteKind], asyncio.Semaphore] = {}
+        # Locks to make admission checks atomic per backend/route
+        self._locks: Dict[tuple[str, RouteKind], asyncio.Lock] = {}
         self._init_semaphores()
 
     def _init_semaphores(self):
@@ -126,6 +128,7 @@ class AdmissionController:
                 limit = config.get_limit(route_kind)
                 key = (backend_class, route_kind)
                 self._semaphores[key] = asyncio.Semaphore(limit)
+                self._locks[key] = asyncio.Lock()
                 logger.info(
                     f"Admission control: {backend_class}.{route_kind} limit={limit}"
                 )
@@ -138,6 +141,11 @@ class AdmissionController:
         actual_class = self.registry.resolve_backend_class(backend_class)
         return self._semaphores.get((actual_class, route_kind))
 
+    def _get_lock(self, backend_class: str, route_kind: RouteKind) -> Optional[asyncio.Lock]:
+        """Get lock for a backend/route pair."""
+        actual_class = self.registry.resolve_backend_class(backend_class)
+        return self._locks.get((actual_class, route_kind))
+
     async def acquire(self, backend_class: str, route_kind: RouteKind):
         """Acquire a slot for the request. Raises HTTPException 429 if overloaded.
         
@@ -145,6 +153,7 @@ class AdmissionController:
         we immediately fail rather than waiting.
         """
         sem = self._get_semaphore(backend_class, route_kind)
+        lock = self._get_lock(backend_class, route_kind)
         if sem is None:
             # No semaphore means this backend doesn't support this route
             raise HTTPException(
@@ -158,21 +167,26 @@ class AdmissionController:
                 },
             )
 
-        # Try to acquire without blocking
-        if sem.locked() and sem._value == 0:
-            # Semaphore is at capacity
-            raise HTTPException(
-                status_code=429,
-                detail={
-                    "error": "backend_overloaded",
-                    "backend_class": backend_class,
-                    "route_kind": route_kind,
-                    "message": f"Backend {backend_class} is at capacity for {route_kind} requests",
-                },
-                headers={"Retry-After": "5"},
-            )
+        if lock is None:
+            await sem.acquire()
+            return
 
-        await sem.acquire()
+        # Try to acquire without blocking, guarding against race conditions.
+        async with lock:
+            if sem._value == 0:
+                # Semaphore is at capacity
+                raise HTTPException(
+                    status_code=429,
+                    detail={
+                        "error": "backend_overloaded",
+                        "backend_class": backend_class,
+                        "route_kind": route_kind,
+                        "message": f"Backend {backend_class} is at capacity for {route_kind} requests",
+                    },
+                    headers={"Retry-After": "5"},
+                )
+
+            await sem.acquire()
 
     def release(self, backend_class: str, route_kind: RouteKind):
         """Release a slot after request completes."""
