@@ -31,6 +31,26 @@
   let activeObjectUrl = null;
   let backendCache = [];
 
+  function normalizeBackendKey(backendClass) {
+    const val = String(backendClass || "").toLowerCase();
+    if (val.includes("qwen")) return "qwen";
+    if (val.includes("lux")) return "lux";
+    return "default";
+  }
+
+  function updateBackendSections() {
+    const fallbackClass = backendCache?.[0]?.backend_class || "";
+    const backendClass = String(backendEl?.value || "").trim() || fallbackClass;
+    const key = normalizeBackendKey(backendClass);
+    const sections = document.querySelectorAll("[data-backends]");
+    sections.forEach((el) => {
+      const raw = String(el.getAttribute("data-backends") || "");
+      const list = raw.split(",").map((item) => item.trim()).filter(Boolean);
+      const show = list.includes("all") || list.includes(key);
+      el.hidden = !show;
+    });
+  }
+
   function setStatus(text, isError) {
     statusEl.textContent = text || "";
     statusEl.className = isError ? "hint error" : "hint";
@@ -79,6 +99,7 @@
         backendEl.appendChild(opt);
       }
       updateBackendHealth();
+      updateBackendSections();
     } catch (e) {}
   }
 
@@ -280,8 +301,12 @@
   generateEl.addEventListener('click', handleGenerate);
   if (saveVoiceEl) saveVoiceEl.addEventListener('click', handleSaveVoice);
   if (deleteVoiceEl) deleteVoiceEl.addEventListener('click', handleDeleteVoice);
-  if (backendEl) backendEl.addEventListener('change', updateBackendHealth);
+  if (backendEl) backendEl.addEventListener('change', () => {
+    updateBackendHealth();
+    updateBackendSections();
+  });
   if (presetEl) presetEl.addEventListener('change', applyPreset);
   loadBackends();
   loadVoiceLibrary();
+  updateBackendSections();
 })();
