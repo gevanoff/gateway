@@ -5,6 +5,7 @@ import io
 import hashlib
 import ipaddress
 import json
+import logging
 import os
 import re
 import secrets
@@ -36,6 +37,7 @@ from app import ui_conversations
 from app import user_store
 
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
@@ -1170,7 +1172,9 @@ async def ui_api_bulk_users(req: Request):
             else:
                 raise ValueError("unknown action")
             results.append({"username": username, "ok": True})
-        except ValueError:
+        except ValueError as e:
+            # Log the actual exception for debugging, but don't expose to external users
+            logger.warning("Bulk user operation failed for username '%s': %s", username, str(e))
             # Do not expose internal exception messages to the client.
             results.append({"username": username, "ok": False, "error": "invalid request"})
     return JSONResponse({"ok": True, "action": action, "results": results})
