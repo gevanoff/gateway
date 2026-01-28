@@ -109,6 +109,28 @@ backends:
       readiness: /readyz
     payload_policy: {}
 
+  skyreels_v2:
+    class: skyreels_v2
+    base_url: ${SKYREELS_BASE_URL}
+    description: SkyReels-V2 video shim
+    supported_capabilities: []
+    concurrency_limits: {}
+    health:
+      liveness: /healthz
+      readiness: /readyz
+    payload_policy: {}
+
+  followyourcanvas:
+    class: followyourcanvas
+    base_url: ${FYC_API_BASE_URL}
+    description: FollowYourCanvas video shim
+    supported_capabilities: []
+    concurrency_limits: {}
+    health:
+      liveness: /healthz
+      readiness: /readyz
+    payload_policy: {}
+
   luxtts:
     class: luxtts
     base_url: http://ai2:9170

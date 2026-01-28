@@ -125,6 +125,9 @@ class Settings(BaseSettings):
     SKYREELS_TIMEOUT_SEC: float = 3600.0
     SKYREELS_GENERATE_PATH: str = "/v1/videos/generations"
 
+    # Optional: FollowYourCanvas video generation shim
+    FYC_API_BASE_URL: str = ""
+
     # Optional: PersonaPlex chat shim (custom UI)
     PERSONAPLEX_BASE_URL: str = ""
     PERSONAPLEX_TIMEOUT_SEC: float = 120.0
