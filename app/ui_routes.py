@@ -2345,12 +2345,32 @@ async def ui_api_backend_status(req: Request) -> Dict[str, Any]:
     _require_ui_access(req)
     registry = get_registry()
     checker = get_health_checker()
+    aliases = get_aliases()
+    alias_map: Dict[str, List[Dict[str, str]]] = {}
+    for alias_name, target_backend in registry.legacy_mapping.items():
+        if not isinstance(alias_name, str) or not isinstance(target_backend, str):
+            continue
+        alias_map.setdefault(target_backend, []).append(
+            {"name": alias_name, "target": target_backend, "kind": "legacy"}
+        )
+    for alias_name, alias in aliases.items():
+        resolved_backend = registry.resolve_backend_class(alias.backend)
+        alias_map.setdefault(resolved_backend, []).append(
+            {
+                "name": alias_name,
+                "target": f"{alias.backend}:{alias.upstream_model}",
+                "kind": "model",
+            }
+        )
     backends = []
     for backend_class, config in registry.backends.items():
         entry: Dict[str, Any] = {
             "backend_class": backend_class,
             "capabilities": list(config.supported_capabilities),
         }
+        alias_entries = alias_map.get(backend_class)
+        if alias_entries:
+            entry["aliases"] = sorted(alias_entries, key=lambda item: item.get("name") or "")
         status = checker.get_status(backend_class)
         if status is not None:
             entry.update(
