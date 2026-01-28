@@ -1005,8 +1005,10 @@
         appsBtnEl.addEventListener('click', (e) => {
           e.stopPropagation();
           const expanded = appsBtnEl.getAttribute('aria-expanded') === 'true';
-          appsBtnEl.setAttribute('aria-expanded', expanded ? 'false' : 'true');
-          appsMenuEl.setAttribute('aria-hidden', expanded ? 'true' : 'false');
+          const willExpand = !expanded;
+          appsBtnEl.setAttribute('aria-expanded', willExpand ? 'true' : 'false');
+          appsMenuEl.setAttribute('aria-hidden', willExpand ? 'false' : 'true');
+          try { appsMenuEl.hidden = !willExpand; } catch (e) {}
         });
         // close when clicking elsewhere
         document.addEventListener('click', (ev) => {
@@ -1014,6 +1016,7 @@
             if (!appsMenuEl.contains(ev.target) && ev.target !== appsBtnEl) {
               appsBtnEl.setAttribute('aria-expanded', 'false');
               appsMenuEl.setAttribute('aria-hidden', 'true');
+              try { appsMenuEl.hidden = true; } catch (e) {}
             }
           } catch (e) {}
         });
