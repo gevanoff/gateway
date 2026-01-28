@@ -517,6 +517,22 @@ async def ui_api_tts(req: Request):
     _require_ui_access(req)
     user = _require_user(req)
     body = _coerce_tts_body(await req.json())
+    # If authenticated and no explicit voice provided, prefer the user's saved voice.
+    try:
+        if user is not None and not body.get("voice"):
+            settings = user_store.get_settings(S.USER_DB_PATH, user_id=user.id) or {}
+            voice = None
+            try:
+                voice = (settings.get("tts") or {}).get("voice") if isinstance(settings, dict) else None
+            except Exception:
+                voice = None
+            if not voice:
+                voice = settings.get("tts_voice") or settings.get("ttsVoice")
+            if isinstance(voice, str) and voice:
+                body["voice"] = voice
+    except Exception:
+        # best-effort only; fall back to request-provided or backend default
+        pass
     backend_class = (getattr(S, "TTS_BACKEND_CLASS", "") or "").strip() or "pocket_tts"
 
     check_backend_ready(backend_class, route_kind="tts")
