@@ -112,6 +112,9 @@ class Settings(BaseSettings):
     TTS_TIMEOUT_SEC: float = 60.0
     TTS_GENERATE_PATH: str = "/v1/audio/speech"
     TTS_BACKEND_CLASS: str = "pocket_tts"
+    TTS_CLONE_PATH: str = "/v1/audio/clone"
+    LUXTTS_CLONE_PATH: str = "/luxtts/clone"
+    QWEN3_TTS_CLONE_PATH: str = "/qwen3-tts/clone"
 
     # Optional: SkyReels-V2 video generation shim
     SKYREELS_BASE_URL: str = ""

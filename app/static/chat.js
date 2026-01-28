@@ -663,6 +663,11 @@
         await generateImage(prompt || '', {});
         return;
       }
+      if (lower === '/clone' || lower.startsWith('/clone ')) {
+        try { window.open('/ui/voice-clone', '_blank', 'noopener'); } catch (e) {}
+        addMessage({ role: 'system', content: 'Opened Voice Clone UI in a new tab.' });
+        return;
+      }
       if (lower === '/scan' || lower.startsWith('/scan ')) {
         const image_url = String(userText || "").replace(/^\/scan\s*/i, '').trim();
         await generateScan(image_url || '');
@@ -1099,6 +1104,11 @@
         if (lower === '/music' || lower.startsWith('/music ')) {
           const body = { style: text.replace(/^\/music\s*/i, '').trim() };
           await generateMusic(body);
+          return;
+        }
+        if (lower === '/clone' || lower.startsWith('/clone ')) {
+          try { window.open('/ui/voice-clone', '_blank', 'noopener'); } catch (e) {}
+          addMessage({ role: 'system', content: 'Opened Voice Clone UI in a new tab.' });
           return;
         }
         if (lower === '/speech' || lower.startsWith('/speech ') || lower.startsWith('/tts ')) {

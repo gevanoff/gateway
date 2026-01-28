@@ -15,7 +15,7 @@ from typing import Any, Dict, Literal, Optional
 import httpx
 from app.httpx_client import httpx_client as _httpx_client
 import subprocess
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Form
 from fastapi.responses import FileResponse
 from fastapi.responses import HTMLResponse
 from fastapi.responses import JSONResponse
@@ -222,6 +222,21 @@ def _resolve_tts_backend_class(req: Request, body: Optional[Dict[str, Any]] = No
             },
         )
     return cfg.backend_class
+
+
+def _effective_tts_clone_path(backend_class: str) -> str:
+    b = (backend_class or "").lower()
+    if "lux" in b:
+        path = (getattr(S, "LUXTTS_CLONE_PATH", "") or "").strip()
+    elif "qwen" in b:
+        path = (getattr(S, "QWEN3_TTS_CLONE_PATH", "") or "").strip()
+    else:
+        path = (getattr(S, "TTS_CLONE_PATH", "") or "").strip()
+    if not path:
+        path = "/v1/audio/clone"
+    if not path.startswith("/"):
+        path = "/" + path
+    return path
 
 
 def _tts_gateway_headers(meta: Dict[str, Any]) -> Dict[str, str]:
@@ -526,6 +541,13 @@ async def ui_tts_frontend(req: Request) -> HTMLResponse:
     return HTMLResponse(html_path.read_text(encoding="utf-8"))
 
 
+@router.get("/ui/voice-clone", include_in_schema=False)
+async def ui_voice_clone_frontend(req: Request) -> HTMLResponse:
+    _require_ui_access(req)
+    html_path = Path(__file__).with_name("static").joinpath("voice_clone.html")
+    return HTMLResponse(html_path.read_text(encoding="utf-8"))
+
+
 @router.get("/ui/personaplex", include_in_schema=False)
 async def ui_personaplex_frontend(req: Request) -> HTMLResponse:
     _require_ui_access(req)
@@ -754,6 +776,88 @@ async def ui_api_tts_voices(req: Request):
                 last_err = e
 
     raise HTTPException(status_code=502, detail=f"tts backend voices query failed: {last_err}")
+
+
+@router.post("/ui/api/tts/clone", include_in_schema=False)
+async def ui_api_tts_clone(
+    req: Request,
+    prompt_audio: UploadFile = File(...),
+    text: str = Form(...),
+    backend_class: str = Form(""),
+    rms: Optional[str] = Form(None),
+    duration: Optional[str] = Form(None),
+    num_steps: Optional[str] = Form(None),
+    t_shift: Optional[str] = Form(None),
+    speed: Optional[str] = Form(None),
+    return_smooth: Optional[str] = Form(None),
+):
+    _require_ui_access(req)
+    _require_user(req)
+
+    if not text or not str(text).strip():
+        raise HTTPException(status_code=400, detail="text is required")
+
+    backend = _resolve_tts_backend_class(req, None, explicit=str(backend_class or "").strip())
+    base = _effective_tts_base_url(backend_class=backend)
+    if not base:
+        raise HTTPException(status_code=404, detail="tts backend not configured")
+
+    path = _effective_tts_clone_path(backend)
+
+    data: Dict[str, Any] = {"text": str(text)}
+    if rms:
+        data["rms"] = str(rms)
+    if duration:
+        data["duration"] = str(duration)
+    if num_steps:
+        data["num_steps"] = str(num_steps)
+    if t_shift:
+        data["t_shift"] = str(t_shift)
+    if speed:
+        data["speed"] = str(speed)
+    if return_smooth:
+        data["return_smooth"] = str(return_smooth)
+
+    file_bytes = await prompt_audio.read()
+    if not file_bytes:
+        raise HTTPException(status_code=400, detail="prompt_audio is required")
+
+    files = {
+        "prompt_audio": (
+            prompt_audio.filename or "prompt_audio",
+            file_bytes,
+            prompt_audio.content_type or "application/octet-stream",
+        )
+    }
+
+    timeout = getattr(S, "TTS_TIMEOUT_SEC", 120.0) or 120.0
+    try:
+        timeout = float(timeout)
+    except Exception:
+        timeout = 120.0
+
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        resp = await client.post(f"{base}{path}", data=data, files=files)
+
+    content_type = resp.headers.get("content-type", "application/octet-stream")
+    if "application/json" in (content_type or ""):
+        try:
+            payload = resp.json()
+        except Exception:
+            payload = {"raw": resp.text}
+        if resp.status_code >= 400:
+            raise HTTPException(status_code=resp.status_code, detail=payload)
+        return JSONResponse(payload)
+
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=resp.status_code, detail=resp.text)
+
+    # Cache and return audio response
+    try:
+        url, _ = _save_ui_audio(audio_bytes=resp.content, mime_hint=content_type)
+        return StreamingResponse(iter([resp.content]), media_type=content_type, headers={"X-Gateway-TTS-URL": url})
+    except Exception:
+        return StreamingResponse(iter([resp.content]), media_type=content_type)
 
 
 @router.get("/ui/audio/{name}", include_in_schema=False)

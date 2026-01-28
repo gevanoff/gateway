@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Voice Clone UI</title>
+    <style>
+      :root { color-scheme: dark; }
+      body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; background: #0b0d10; color: #e7edf6; }
+      main { max-width: 980px; margin: 0 auto; padding: 16px; }
+      header { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom: 12px; }
+      h1 { margin: 0; font-size: 16px; font-weight: 650; }
+      .hint { font-size: 12px; color: #a9b4c3; }
+      a { color: #9ac2ff; text-decoration: none; }
+      a:hover { text-decoration: underline; }
+
+      .card { border: 1px solid rgba(231,237,246,0.12); background: #0e1217; border-radius: 12px; padding: 12px; }
+      .row { display:flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+      .row > * { flex: 0 0 auto; }
+
+      label { display:flex; flex-direction:column; gap:6px; }
+      label span { font-size: 12px; color: #a9b4c3; }
+      select, input, textarea, button { font: inherit; }
+      select, input, textarea { box-sizing: border-box; padding: 10px; border-radius: 10px; border: 1px solid rgba(231,237,246,0.12); background: #12161c; color: #e7edf6; }
+      textarea { width: 100%; resize: vertical; min-height: 90px; }
+      button { padding: 10px 12px; border-radius: 10px; border: 1px solid rgba(231,237,246,0.14); background: #12161c; color: #e7edf6; cursor: pointer; }
+      button:disabled { opacity: 0.6; cursor: default; }
+
+      .out { margin-top: 12px; }
+      .audio-card { display:flex; flex-direction:column; gap:10px; width: 100%; max-width: 640px; }
+      .pill { display:inline-flex; gap:8px; align-items:center; padding: 6px 10px; border: 1px solid rgba(231,237,246,0.12); border-radius: 999px; background: rgba(231,237,246,0.03); }
+      .error { color: #ffb4b4; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <link rel="icon" href="/static/ai-infra.png" />
+      <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32.png" />
+      <link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16.png" />
+      <link rel="manifest" href="/static/site.webmanifest">
+      <link rel="mask-icon" href="/static/safari-pinned-tab.svg" color="#2563eb" />
+      <meta name="msapplication-TileColor" content="#0b0d10">
+      <meta name="msapplication-config" content="/static/browserconfig.xml">
+      <meta name="theme-color" content="#0b0d10">
+      <header>
+        <div>
+          <h1>Voice Clone UI</h1>
+          <div class="hint">Upload a reference audio sample and synthesize speech with a cloned voice.</div>
+        </div>
+        <div class="row">
+          <a class="pill" href="/ui">Back to Chat</a>
+        </div>
+      </header>
+
+      <section class="card">
+        <div class="row" style="justify-content:space-between">
+          <label style="min-width: 320px; flex: 1 1 640px;">
+            <span>Text</span>
+            <textarea id="text" placeholder="Enter text to speak"></textarea>
+          </label>
+        </div>
+
+        <div class="row" style="margin-top:12px">
+          <label>
+            <span>TTS Backend</span>
+            <select id="backend">
+              <option value="">(default)</option>
+            </select>
+          </label>
+
+          <label>
+            <span>Prompt Audio</span>
+            <input id="promptAudio" type="file" accept="audio/*" />
+          </label>
+        </div>
+
+        <div class="row" style="margin-top:12px">
+          <label>
+            <span>RMS</span>
+            <input id="rms" type="number" step="0.001" value="0.01" />
+          </label>
+          <label>
+            <span>Duration (sec)</span>
+            <input id="duration" type="number" step="0.1" value="5" />
+          </label>
+          <label>
+            <span>Num steps</span>
+            <input id="numSteps" type="number" step="1" value="4" />
+          </label>
+          <label>
+            <span>T shift</span>
+            <input id="tShift" type="number" step="0.1" value="0.9" />
+          </label>
+          <label>
+            <span>Speed</span>
+            <input id="speed" type="number" step="0.1" value="1.0" />
+          </label>
+          <label>
+            <span>Return smooth</span>
+            <select id="returnSmooth">
+              <option value="">(default)</option>
+              <option value="true">true</option>
+              <option value="false">false</option>
+            </select>
+          </label>
+          <button id="generate" type="button">Generate</button>
+        </div>
+
+        <div class="out">
+          <div id="status" class="hint"></div>
+          <div id="meta" class="hint" style="margin-top: 8px"></div>
+          <div id="player" style="margin-top: 12px"></div>
+        </div>
+      </section>
+    </main>
+
+    <script src="/static/voice_clone.js?v=1"></script>
+  </body>
+</html>
