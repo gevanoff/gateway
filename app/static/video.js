@@ -55,9 +55,17 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(preview),
       });
+      const requestId = resp.headers.get("X-Request-Id") || "";
       const text = await resp.text();
       if (!resp.ok) {
-        setStatus(text, true);
+        let detail = text;
+        try {
+          detail = JSON.stringify(JSON.parse(text), null, 2);
+        } catch {
+          detail = text;
+        }
+        setStatus(`Request failed${requestId ? ` (request id: ${requestId})` : ""}`, true);
+        setPreview(`<pre>${detail}</pre>`);
         return;
       }
       let payload;
@@ -75,7 +83,9 @@
       } else {
         setPreview(`<pre>${JSON.stringify(payload, null, 2)}</pre>`);
       }
-      setMeta(`Status: ${payload?.status || "ok"}`);
+      const metaBits = [`Status: ${payload?.status || "ok"}`];
+      if (requestId) metaBits.push(`Request ID: ${requestId}`);
+      setMeta(metaBits.join(" · "));
       setStatus("Done.", false);
     } catch (e) {
       setStatus(String(e), true);
