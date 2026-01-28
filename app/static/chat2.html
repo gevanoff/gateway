@@ -64,6 +64,22 @@
       .apps-btn .caret { font-size: 12px; color: #93a4ba; margin-left: 4px; }
       .apps-menu[aria-hidden="true"] { display: none; }
       .apps-menu[aria-hidden="false"] { display: block; }
+      .status-panel { margin-top: 12px; border: 1px solid rgba(231,237,246,0.12); border-radius: 12px; padding: 8px 12px; background: #0e1217; }
+      .status-panel summary { cursor: pointer; font-weight: 600; color: #e7edf6; }
+      .status-body { margin-top: 10px; display: flex; flex-direction: column; gap: 10px; }
+      .status-meta { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+      .status-list { display: flex; flex-direction: column; gap: 8px; }
+      .status-row { display: flex; flex-direction: column; gap: 6px; padding: 10px; border-radius: 10px; border: 1px solid rgba(231,237,246,0.08); background: rgba(231,237,246,0.02); }
+      .status-row-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+      .status-name { font-weight: 600; }
+      .status-badges { display: flex; gap: 6px; flex-wrap: wrap; }
+      .status-badge { font-size: 11px; padding: 4px 8px; border-radius: 999px; border: 1px solid transparent; }
+      .status-badge.ok { background: rgba(111,184,255,0.18); color: #cfe7ff; border-color: rgba(111,184,255,0.4); }
+      .status-badge.warn { background: rgba(255,200,50,0.12); color: #f6d98b; border-color: rgba(255,200,50,0.3); }
+      .status-badge.bad { background: rgba(255,120,120,0.12); color: #ffb6b6; border-color: rgba(255,120,120,0.3); }
+      .status-detail { font-size: 12px; color: #a9b4c3; }
+      .status-error { font-size: 12px; color: #ffb6b6; }
+      .status-empty { font-size: 12px; color: #93a4ba; }
     </style>
   </head>
   <body>
@@ -134,6 +150,20 @@
             <li><strong>/video</strong> — video generation UI via SkyReels-V2. Open <a href="/ui/video">Video UI</a>.</li>
           </ul>
           <div class="hint" style="margin-top:6px">Notes: Chat commands require that the UI is reachable (see <code>UI_IP_ALLOWLIST</code>) and you may need to be authenticated for persisted storage.</div>
+        </div>
+      </details>
+
+      <details id="backendStatusPanel" class="status-panel">
+        <summary>Backend status</summary>
+        <div class="status-body">
+          <div class="status-meta">
+            <span id="backendStatusUpdated" class="hint">Last updated: --</span>
+            <button id="backendStatusRefresh" type="button">Refresh</button>
+          </div>
+          <div id="backendStatusError" class="status-error" hidden></div>
+          <div id="backendStatusList" class="status-list">
+            <div class="status-empty">Expand to load backend status.</div>
+          </div>
         </div>
       </details>
     </main>

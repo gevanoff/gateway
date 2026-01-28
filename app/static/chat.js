@@ -33,6 +33,11 @@
     const clearChatEl = $("clearChat");
     const resetSessionEl = $("resetSession");
     const settingsBtn = $("settingsBtn");
+    const backendStatusPanel = $("backendStatusPanel");
+    const backendStatusList = $("backendStatusList");
+    const backendStatusUpdated = $("backendStatusUpdated");
+    const backendStatusError = $("backendStatusError");
+    const backendStatusRefresh = $("backendStatusRefresh");
 
     /** @type {{role:'user'|'assistant'|'system', content:string}[]} */
     let history = [];
@@ -90,6 +95,118 @@
     function scrollToBottom() {
       if (!chatEl) return;
       chatEl.scrollTop = chatEl.scrollHeight;
+    }
+
+    function formatTimestamp(tsSeconds) {
+      if (!Number.isFinite(tsSeconds)) return "--";
+      try {
+        return new Date(tsSeconds * 1000).toLocaleTimeString();
+      } catch (e) {
+        return "--";
+      }
+    }
+
+    function renderBackendStatus(data) {
+      if (!backendStatusList) return;
+      backendStatusList.innerHTML = "";
+      if (!data || !Array.isArray(data.backends) || data.backends.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "status-empty";
+        empty.textContent = "No backend status available.";
+        backendStatusList.appendChild(empty);
+        return;
+      }
+
+      data.backends.forEach((backend) => {
+        const row = document.createElement("div");
+        row.className = "status-row";
+
+        const header = document.createElement("div");
+        header.className = "status-row-header";
+
+        const name = document.createElement("div");
+        name.className = "status-name";
+        name.textContent = backend.backend_class || "unknown";
+        header.appendChild(name);
+
+        const badges = document.createElement("div");
+        badges.className = "status-badges";
+
+        const healthy = document.createElement("span");
+        const isHealthy = backend.healthy === true;
+        healthy.className = `status-badge ${isHealthy ? "ok" : backend.healthy === false ? "bad" : "warn"}`;
+        healthy.textContent = backend.healthy === undefined ? "Health unknown" : isHealthy ? "Healthy" : "Unhealthy";
+        badges.appendChild(healthy);
+
+        const ready = document.createElement("span");
+        const isReady = backend.ready === true;
+        ready.className = `status-badge ${isReady ? "ok" : backend.ready === false ? "bad" : "warn"}`;
+        ready.textContent = backend.ready === undefined ? "Readiness unknown" : isReady ? "Ready" : "Not ready";
+        badges.appendChild(ready);
+
+        header.appendChild(badges);
+        row.appendChild(header);
+
+        const detail = document.createElement("div");
+        detail.className = "status-detail";
+        const capabilities = Array.isArray(backend.capabilities) ? backend.capabilities.join(", ") : "unknown";
+        const lastCheck = backend.last_check ? formatTimestamp(backend.last_check) : "--";
+        detail.textContent = `Capabilities: ${capabilities} • Last check: ${lastCheck}`;
+        row.appendChild(detail);
+
+        if (backend.error) {
+          const err = document.createElement("div");
+          err.className = "status-error";
+          err.textContent = backend.error;
+          row.appendChild(err);
+        }
+
+        backendStatusList.appendChild(row);
+      });
+    }
+
+    async function loadBackendStatus() {
+      if (!backendStatusList) return;
+      if (backendStatusError) backendStatusError.hidden = true;
+      try {
+        const resp = await fetch("/ui/api/backend_status", { credentials: "same-origin" });
+        if (handle401(resp)) return;
+        if (!resp.ok) {
+          const text = await resp.text();
+          throw new Error(text || `HTTP ${resp.status}`);
+        }
+        const data = await resp.json();
+        renderBackendStatus(data);
+        if (backendStatusUpdated) {
+          backendStatusUpdated.textContent = `Last updated: ${formatTimestamp(data.generated_at)}`;
+        }
+      } catch (e) {
+        if (backendStatusError) {
+          backendStatusError.textContent = `Failed to load status: ${e}`;
+          backendStatusError.hidden = false;
+        }
+        if (backendStatusList) {
+          backendStatusList.innerHTML = "";
+          const empty = document.createElement("div");
+          empty.className = "status-empty";
+          empty.textContent = "Unable to load backend status.";
+          backendStatusList.appendChild(empty);
+        }
+      }
+    }
+
+    let backendStatusInterval = null;
+    function startBackendStatusPolling() {
+      if (backendStatusInterval) return;
+      loadBackendStatus();
+      backendStatusInterval = window.setInterval(loadBackendStatus, 30000);
+    }
+
+    function stopBackendStatusPolling() {
+      if (backendStatusInterval) {
+        window.clearInterval(backendStatusInterval);
+        backendStatusInterval = null;
+      }
     }
 
     function addMessage({ role, content, meta, html }) {
@@ -1132,6 +1249,23 @@
       if (settingsCancel) settingsCancel.addEventListener('click', () => closeSettings());
       if (settingsClose) settingsClose.addEventListener('click', () => closeSettings());
       if (settingsSave) settingsSave.addEventListener('click', () => saveSettingsFromModal());
+      if (backendStatusPanel) {
+        backendStatusPanel.addEventListener('toggle', () => {
+          if (backendStatusPanel.open) {
+            startBackendStatusPolling();
+          } else {
+            stopBackendStatusPolling();
+          }
+        });
+        if (backendStatusPanel.open) {
+          startBackendStatusPolling();
+        }
+      }
+      if (backendStatusRefresh) {
+        backendStatusRefresh.addEventListener('click', () => {
+          void loadBackendStatus();
+        });
+      }
       // Apps menu: toggle and admin-only link visibility
       const appsBtnEl = document.getElementById('appsBtn');
       const appsMenuEl = document.getElementById('appsMenu');

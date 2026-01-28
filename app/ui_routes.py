@@ -24,7 +24,7 @@ from fastapi.responses import StreamingResponse
 
 from app.backends import check_capability, get_admission_controller, get_registry, _capability_availability
 from app.config import S
-from app.health_checker import check_backend_ready
+from app.health_checker import check_backend_ready, get_health_checker
 from app.model_aliases import get_aliases
 from app.models import ChatCompletionRequest, ChatMessage
 from app.openai_utils import now_unix, sse, sse_done
@@ -2240,6 +2240,32 @@ async def ui_chat_stream(req: Request):
     out.headers["X-Model-Used"] = upstream_model
     out.headers["X-Router-Reason"] = route.reason
     return out
+
+
+@router.get("/ui/api/backend_status", include_in_schema=False)
+async def ui_api_backend_status(req: Request) -> Dict[str, Any]:
+    _require_ui_access(req)
+    registry = get_registry()
+    checker = get_health_checker()
+    backends = []
+    for backend_class, config in registry.backends.items():
+        entry: Dict[str, Any] = {
+            "backend_class": backend_class,
+            "capabilities": list(config.supported_capabilities),
+        }
+        status = checker.get_status(backend_class)
+        if status is not None:
+            entry.update(
+                {
+                    "healthy": status.is_healthy,
+                    "ready": status.is_ready,
+                    "last_check": status.last_check,
+                    "error": status.error,
+                }
+            )
+        backends.append(entry)
+    backends.sort(key=lambda item: item.get("backend_class") or "")
+    return {"generated_at": time.time(), "backends": backends}
 
 
 @router.post("/ui/api/image", include_in_schema=False)
