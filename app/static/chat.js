@@ -616,70 +616,11 @@
         await generateImage(prompt || '', {});
         return;
       }
-        if (lower === '/scan' || lower.startsWith('/scan ')) {
-          const image_url = String(userText || "").replace(/^\/scan\s*/i, '').trim();
-          await generateScan(image_url || '');
-          return;
-        }
-        if (lower === '/scan' || lower.startsWith('/scan ')) {
-          const image_url = String(userText || "").replace(/^\/scan\s*/i, '').trim();
-          await generateScan(image_url || '');
-          return;
-        }
-            if (!image_url) return;
-            try {
-              const assistant = addMessage({ role: "assistant", content: "", meta: "Assistant" });
-              assistant.contentEl.textContent = "";
-              const thinkingLine = document.createElement("div");
-              thinkingLine.className = "thinking-line";
-              thinkingLine.textContent = "Scanning image…";
-              assistant.contentEl.appendChild(thinkingLine);
-
-              const resp = await fetch("/ui/api/scan", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ image_url }) });
-              const text = await resp.text();
-              if (handle401(resp)) return;
-              if (!resp.ok) {
-                assistant.contentEl.textContent = text;
-                assistant.metaEl.textContent = `Scan HTTP ${resp.status}`;
-                return;
-              }
-              let payload;
-              try {
-                payload = JSON.parse(text);
-              } catch {
-                assistant.contentEl.textContent = text;
-                return;
-              }
-
-              let ocrText = "";
-              if (typeof payload === 'object' && payload !== null) {
-                if (typeof payload.text === 'string' && payload.text.trim()) {
-                  ocrText = payload.text.trim();
-                } else if (Array.isArray(payload.data) && payload.data.length) {
-                  const parts = [];
-                  for (const item of payload.data) {
-                    if (item && typeof item === 'object') {
-                      if (typeof item.text === 'string' && item.text.trim()) parts.push(item.text.trim());
-                      else if (Array.isArray(item.lines)) {
-                        for (const ln of item.lines) if (ln && typeof ln.text === 'string') parts.push(ln.text);
-                      } else {
-                        parts.push(JSON.stringify(item));
-                      }
-                    }
-                  }
-                  ocrText = parts.join('\n');
-                } else {
-                  ocrText = JSON.stringify(payload, null, 2);
-                }
-              } else {
-                ocrText = String(payload || '');
-              }
-
-              assistant.contentEl.textContent = ocrText;
-            } catch (e) {
-              addMessage({ role: "system", content: String(e) });
-            }
-          }
+      if (lower === '/scan' || lower.startsWith('/scan ')) {
+        const image_url = String(userText || "").replace(/^\/scan\s*/i, '').trim();
+        await generateScan(image_url || '');
+        return;
+      }
       if (lower === '/speech' || lower.startsWith('/speech ') || lower.startsWith('/tts ')) {
         const prompt = String(userText || "").replace(/^\/(speech|tts)\s*/i, '').trim();
         await generateSpeech(prompt || '');
@@ -906,6 +847,67 @@
         }
 
         assistant.contentEl.textContent = `Music response: ${JSON.stringify(payload)}`;
+      } catch (e) {
+        addMessage({ role: "system", content: String(e) });
+      }
+    }
+
+    async function generateScan(image_url) {
+      if (!image_url) return;
+      try {
+        const assistant = addMessage({ role: "assistant", content: "", meta: "Assistant" });
+        assistant.contentEl.textContent = "";
+        const thinkingLine = document.createElement("div");
+        thinkingLine.className = "thinking-line";
+        thinkingLine.textContent = "Scanning image…";
+        assistant.contentEl.appendChild(thinkingLine);
+
+        const resp = await fetch("/ui/api/scan", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ image_url }),
+        });
+        const text = await resp.text();
+        if (handle401(resp)) return;
+        if (!resp.ok) {
+          assistant.contentEl.textContent = text;
+          assistant.metaEl.textContent = `Scan HTTP ${resp.status}`;
+          return;
+        }
+        let payload;
+        try {
+          payload = JSON.parse(text);
+        } catch {
+          assistant.contentEl.textContent = text;
+          return;
+        }
+
+        let ocrText = "";
+        if (typeof payload === 'object' && payload !== null) {
+          if (typeof payload.text === 'string' && payload.text.trim()) {
+            ocrText = payload.text.trim();
+          } else if (Array.isArray(payload.data) && payload.data.length) {
+            const parts = [];
+            for (const item of payload.data) {
+              if (item && typeof item === 'object') {
+                if (typeof item.text === 'string' && item.text.trim()) parts.push(item.text.trim());
+                else if (Array.isArray(item.lines)) {
+                  for (const ln of item.lines) if (ln && typeof ln.text === 'string') parts.push(ln.text);
+                } else {
+                  parts.push(JSON.stringify(item));
+                }
+              }
+            }
+            ocrText = parts.join('\n');
+          } else {
+            ocrText = JSON.stringify(payload, null, 2);
+          }
+        } else {
+          ocrText = String(payload || '');
+        }
+
+        assistant.contentEl.textContent = ocrText;
       } catch (e) {
         addMessage({ role: "system", content: String(e) });
       }
