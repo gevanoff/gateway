@@ -1,35 +1,74 @@
 <!doctype html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <title>Gateway Admin - Users</title>
-</head>
-<body>
-  <h1>Admin: Create User</h1>
-  <form id="createForm">
-    <label>Username: <input id="username" /></label><br/>
-    <label>Password: <input id="password" type="password"/></label><br/>
-    <label>Admin: <input id="isadmin" type="checkbox"/></label><br/>
-    <button type="submit">Create</button>
-  </form>
-  <div id="result"></div>
-  <script>
-    async function postJson(url, body){
-      const res = await fetch(url, {method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify(body), credentials:'include'});
-      return res.json();
-    }
-    document.getElementById('createForm').addEventListener('submit', async (ev)=>{
-      ev.preventDefault();
-      const u = document.getElementById('username').value;
-      const p = document.getElementById('password').value;
-      const a = document.getElementById('isadmin').checked;
-      try{
-        const j = await postJson('/ui/api/users', {username:u, password:p, admin:a});
-        document.getElementById('result').textContent = JSON.stringify(j);
-      }catch(e){
-        document.getElementById('result').textContent = String(e);
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Gateway Admin - Users</title>
+    <style>
+      :root { color-scheme: dark; }
+      body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; background: #0b0d10; color: #e7edf6; }
+      main { max-width: 980px; margin: 0 auto; padding: 16px; }
+      header { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom: 12px; }
+      h1 { margin: 0; font-size: 16px; font-weight: 650; }
+      .hint { font-size: 12px; color: #a9b4c3; }
+      .card { background: #071018; border: 1px solid rgba(231,237,246,0.06); padding: 16px; border-radius: 12px; }
+      label { display:block; margin-bottom: 8px; }
+      input[type="text"], input[type="password"] { box-sizing: border-box; padding: 8px 10px; border-radius: 8px; border: 1px solid rgba(231,237,246,0.12); background: #0e1217; color: #e7edf6; width: 100%; }
+      .row { display:flex; gap:8px; align-items:center; }
+      button { padding: 8px 12px; border-radius: 8px; border: 1px solid rgba(231,237,246,0.14); background: #12161c; color: #e7edf6; cursor: pointer; }
+      .result { margin-top: 12px; font-family: monospace; white-space: pre-wrap; color: #c6d2e4; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <div>
+          <h1>Gateway Admin</h1>
+          <div class="hint">User management — admins only</div>
+        </div>
+        <div>
+          <a href="/ui" style="color:#9fbff5; text-decoration:none;">← Back to Chat UI</a>
+        </div>
+      </header>
+
+      <section class="card">
+        <h2 style="font-size:14px;margin-top:0">Create User</h2>
+        <form id="createForm">
+          <label>Username
+            <input id="username" type="text" autocomplete="username" />
+          </label>
+          <label>Password
+            <input id="password" type="password" autocomplete="new-password" />
+          </label>
+          <label class="row"><input id="isadmin" type="checkbox"/> <span>Admin</span></label>
+          <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px">
+            <button type="submit">Create</button>
+          </div>
+        </form>
+        <div id="result" class="result"></div>
+      </section>
+
+    </main>
+    <script>
+      async function postJson(url, body){
+        const res = await fetch(url, {method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify(body), credentials:'same-origin'});
+        if (!res.ok) throw new Error(await res.text());
+        return res.json();
       }
-    })
-  </script>
-</body>
+      document.getElementById('createForm').addEventListener('submit', async (ev)=>{
+        ev.preventDefault();
+        const u = document.getElementById('username').value.trim();
+        const p = document.getElementById('password').value;
+        const a = document.getElementById('isadmin').checked;
+        const out = document.getElementById('result');
+        out.textContent = '';
+        try{
+          const j = await postJson('/ui/api/users', {username:u, password:p, admin:a});
+          out.textContent = JSON.stringify(j, null, 2);
+        }catch(e){
+          out.textContent = String(e);
+        }
+      });
+    </script>
+  </body>
 </html>
