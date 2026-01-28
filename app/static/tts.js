@@ -3,6 +3,7 @@
 
   const textEl = $("text");
   const backendEl = $("backend");
+  const backendHealthEl = $("backendHealth");
   const voiceEl = $("voice");
   const speedEl = $("speed");
   const generateEl = $("generate");
@@ -107,8 +108,16 @@
         if (!val) continue;
         const opt = document.createElement('option');
         opt.value = val;
-        opt.textContent = item?.description ? `${val} — ${item.description}` : String(val);
+        const health = item?.ready === false ? 'not ready' : (item?.healthy === false ? 'unhealthy' : 'ready');
+        opt.textContent = item?.description ? `${val} — ${item.description} (${health})` : `${val} (${health})`;
         backendEl.appendChild(opt);
+      }
+      if (backendHealthEl) {
+        const selected = list.find((b) => b.backend_class === backendEl.value) || list[0];
+        if (selected) {
+          const health = selected?.ready === false ? 'not ready' : (selected?.healthy === false ? 'unhealthy' : 'ready');
+          backendHealthEl.textContent = `${selected.backend_class}: ${health}`;
+        }
       }
     } catch (e) {
       // ignore

@@ -116,6 +116,10 @@ class Settings(BaseSettings):
     LUXTTS_CLONE_PATH: str = "/luxtts/clone"
     QWEN3_TTS_CLONE_PATH: str = "/qwen3-tts/clone"
 
+    # Voice library for cloned voices
+    VOICE_LIBRARY_DIR: str = "/var/lib/gateway/data/voice_library"
+    VOICE_LIBRARY_MAX_BYTES: int = 50_000_000
+
     # Optional: SkyReels-V2 video generation shim
     SKYREELS_BASE_URL: str = ""
     SKYREELS_TIMEOUT_SEC: float = 3600.0

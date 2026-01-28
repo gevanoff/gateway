@@ -69,12 +69,41 @@
           </label>
 
           <label>
+            <span>Backend health</span>
+            <div id="backendHealth" class="hint">Loading...</div>
+          </label>
+
+          <label>
             <span>Prompt Audio</span>
             <input id="promptAudio" type="file" accept="audio/*" />
           </label>
         </div>
 
         <div class="row" style="margin-top:12px">
+          <label>
+            <span>Saved Voice</span>
+            <select id="savedVoice">
+              <option value="">(none)</option>
+            </select>
+          </label>
+          <label>
+            <span>Voice Name (save)</span>
+            <input id="voiceName" type="text" placeholder="e.g. alex_ref" />
+          </label>
+          <button id="saveVoice" type="button">Save Voice Sample</button>
+          <button id="deleteVoice" type="button">Delete Selected</button>
+        </div>
+
+        <div class="row" style="margin-top:12px">
+          <label>
+            <span>Preset Profile</span>
+            <select id="preset">
+              <option value="">(none)</option>
+              <option value="fast">Fast (steps=3, t_shift=0.8)</option>
+              <option value="balanced">Balanced (steps=4, t_shift=0.9)</option>
+              <option value="quality">Quality (steps=6, t_shift=0.95)</option>
+            </select>
+          </label>
           <label>
             <span>RMS</span>
             <input id="rms" type="number" step="0.001" value="0.01" />

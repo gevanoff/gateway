@@ -49,7 +49,7 @@
       <header>
         <div>
           <h1>Gateway Text-to-Speech UI</h1>
-          <div class="hint">Generate audio from text using the Pocket TTS backend.</div>
+          <div class="hint">Generate audio from text using a selected TTS backend.</div>
         </div>
         <div class="row">
           <a class="pill" href="/ui">Back to Chat</a>
@@ -70,6 +70,11 @@
             <select id="backend">
               <option value="">(default)</option>
             </select>
+          </label>
+
+          <label>
+            <span>Backend health</span>
+            <div id="backendHealth" class="hint">Loading...</div>
           </label>
 
           <label>

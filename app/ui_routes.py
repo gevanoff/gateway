@@ -407,6 +407,103 @@ def _save_ui_audio(*, audio_bytes: bytes, mime_hint: str) -> tuple[str, str]:
     return f"/ui/audio/{name}", sha256
 
 
+def _voice_library_dir() -> str:
+    return (getattr(S, "VOICE_LIBRARY_DIR", "") or "/var/lib/gateway/data/voice_library").strip() or "/var/lib/gateway/data/voice_library"
+
+
+def _voice_library_max_bytes() -> int:
+    try:
+        return int(getattr(S, "VOICE_LIBRARY_MAX_BYTES", 50_000_000) or 50_000_000)
+    except Exception:
+        return 50_000_000
+
+
+def _safe_voice_name(name: str) -> str:
+    clean = re.sub(r"[^A-Za-z0-9._-]+", "_", (name or "").strip())
+    clean = clean.strip("._-")
+    return clean[:48] if clean else "voice"
+
+
+def _save_voice_sample(*, name: str, audio_bytes: bytes, mime_hint: str) -> Dict[str, Any]:
+    if not isinstance(audio_bytes, (bytes, bytearray)):
+        raise ValueError("audio_bytes must be bytes")
+    if len(audio_bytes) > _voice_library_max_bytes():
+        raise ValueError("audio exceeds voice library limit")
+
+    lib = _voice_library_dir()
+    _ensure_dir(lib)
+    mime = (mime_hint or "audio/wav").strip()
+    ext = _audio_mime_to_ext(mime)
+    safe_name = _safe_voice_name(name)
+    voice_id = f"{safe_name}_{secrets.token_urlsafe(8)}".replace("-", "_")
+    fname = f"{voice_id}.{ext}"
+    path = os.path.join(lib, fname)
+    with open(path, "wb") as f:
+        f.write(bytes(audio_bytes))
+    return {"id": voice_id, "name": safe_name, "filename": fname, "mime": mime, "bytes": len(audio_bytes)}
+
+
+def _list_voice_samples() -> list[Dict[str, Any]]:
+    lib = _voice_library_dir()
+    if not os.path.isdir(lib):
+        return []
+    out: list[Dict[str, Any]] = []
+    for name in os.listdir(lib):
+        if not name or name.startswith("."):
+            continue
+        full = os.path.join(lib, name)
+        if not os.path.isfile(full):
+            continue
+        voice_id, _sep, _ext = name.partition(".")
+        out.append({"id": voice_id, "filename": name})
+    out.sort(key=lambda x: x.get("id") or "")
+    return out
+
+
+def _load_voice_sample(voice_id: str) -> tuple[bytes, str] | None:
+    lib = _voice_library_dir()
+    if not os.path.isdir(lib):
+        return None
+    safe = _safe_voice_name(voice_id)
+    # accept id prefixes to locate any extension
+    for name in os.listdir(lib):
+        if not name or name.startswith("."):
+            continue
+        if name.startswith(safe):
+            full = os.path.join(lib, name)
+            if not os.path.isfile(full):
+                continue
+            with open(full, "rb") as f:
+                data = f.read()
+            mime = "audio/wav"
+            ext = name.rsplit(".", 1)[-1].lower()
+            if ext == "mp3":
+                mime = "audio/mpeg"
+            elif ext == "ogg":
+                mime = "audio/ogg"
+            elif ext == "webm":
+                mime = "audio/webm"
+            return data, mime
+    return None
+
+
+def _delete_voice_sample(voice_id: str) -> bool:
+    lib = _voice_library_dir()
+    if not os.path.isdir(lib):
+        return False
+    safe = _safe_voice_name(voice_id)
+    removed = False
+    for name in os.listdir(lib):
+        if name.startswith(safe):
+            full = os.path.join(lib, name)
+            try:
+                os.remove(full)
+                removed = True
+            except Exception:
+                continue
+    return removed
+
+
 def _gateway_headers(meta: Dict[str, Any]) -> Dict[str, str]:
     headers: Dict[str, str] = {}
     if not isinstance(meta, dict):
@@ -781,9 +878,11 @@ async def ui_api_tts_voices(req: Request):
 @router.post("/ui/api/tts/clone", include_in_schema=False)
 async def ui_api_tts_clone(
     req: Request,
-    prompt_audio: UploadFile = File(...),
+    prompt_audio: UploadFile | None = File(None),
     text: str = Form(...),
     backend_class: str = Form(""),
+    voice_name: str = Form(""),
+    voice_id: str = Form(""),
     rms: Optional[str] = Form(None),
     duration: Optional[str] = Form(None),
     num_steps: Optional[str] = Form(None),
@@ -818,15 +917,25 @@ async def ui_api_tts_clone(
     if return_smooth:
         data["return_smooth"] = str(return_smooth)
 
-    file_bytes = await prompt_audio.read()
+    file_bytes = b""
+    file_mime = ""
+    if prompt_audio is not None:
+        file_bytes = await prompt_audio.read()
+        file_mime = prompt_audio.content_type or "application/octet-stream"
+
+    if not file_bytes and voice_id:
+        loaded = _load_voice_sample(voice_id)
+        if loaded is not None:
+            file_bytes, file_mime = loaded
+
     if not file_bytes:
-        raise HTTPException(status_code=400, detail="prompt_audio is required")
+        raise HTTPException(status_code=400, detail="prompt_audio or voice_id is required")
 
     files = {
         "prompt_audio": (
-            prompt_audio.filename or "prompt_audio",
+            (prompt_audio.filename if prompt_audio is not None else "prompt_audio"),
             file_bytes,
-            prompt_audio.content_type or "application/octet-stream",
+            file_mime or "application/octet-stream",
         )
     }
 
@@ -855,9 +964,48 @@ async def ui_api_tts_clone(
     # Cache and return audio response
     try:
         url, _ = _save_ui_audio(audio_bytes=resp.content, mime_hint=content_type)
-        return StreamingResponse(iter([resp.content]), media_type=content_type, headers={"X-Gateway-TTS-URL": url})
+        headers = {"X-Gateway-TTS-URL": url}
+        if voice_name:
+            try:
+                saved = _save_voice_sample(name=voice_name, audio_bytes=file_bytes, mime_hint=file_mime or "audio/wav")
+                headers["X-Gateway-Voice-Id"] = saved.get("id") or ""
+            except Exception:
+                pass
+        return StreamingResponse(iter([resp.content]), media_type=content_type, headers=headers)
     except Exception:
         return StreamingResponse(iter([resp.content]), media_type=content_type)
+
+
+@router.get("/ui/api/tts/voice-library", include_in_schema=False)
+async def ui_api_voice_library_list(req: Request) -> Dict[str, Any]:
+    _require_ui_access(req)
+    _require_user(req)
+    return {"voices": _list_voice_samples()}
+
+
+@router.post("/ui/api/tts/voice-library", include_in_schema=False)
+async def ui_api_voice_library_save(
+    req: Request,
+    voice_name: str = Form(""),
+    prompt_audio: UploadFile = File(...),
+):
+    _require_ui_access(req)
+    _require_user(req)
+    if not voice_name:
+        raise HTTPException(status_code=400, detail="voice_name is required")
+    file_bytes = await prompt_audio.read()
+    if not file_bytes:
+        raise HTTPException(status_code=400, detail="prompt_audio is required")
+    saved = _save_voice_sample(name=voice_name, audio_bytes=file_bytes, mime_hint=prompt_audio.content_type or "audio/wav")
+    return {"voice": saved}
+
+
+@router.delete("/ui/api/tts/voice-library/{voice_id}", include_in_schema=False)
+async def ui_api_voice_library_delete(req: Request, voice_id: str):
+    _require_ui_access(req)
+    _require_user(req)
+    ok = _delete_voice_sample(voice_id)
+    return {"ok": ok, "voice_id": voice_id}
 
 
 @router.get("/ui/audio/{name}", include_in_schema=False)
