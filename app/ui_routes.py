@@ -1045,44 +1045,56 @@ def _conversation_to_chat_messages(convo: ui_conversations.Conversation) -> list
     if convo.summary:
         msgs.append(ChatMessage(role="system", content=f"Conversation summary:\n{convo.summary.strip()}"))
 
-    # Merge consecutive messages of the same role to present clear alternating
-    # turns to the model. This prevents the model from attempting to reply to
-    # each prior user chunk as a separate request.
-    last_role: str | None = None
+    # Collect textual messages (skip images) and preserve only the last user
+    # message as the actual user prompt. All earlier messages are folded into a
+    # single system-side "context" message so the model can use them for
+    # reference but will not attempt to reply to each one separately.
+    items: list[tuple[str, str]] = []
     for item in convo.messages:
         if not isinstance(item, dict):
             continue
-        role = str(item.get("role") or "").strip() or "user"
-        # Skip non-text assistant artifacts from the prompt context.
         if str(item.get("type") or "") == "image":
             continue
+        role = str(item.get("role") or "").strip() or "user"
         content = item.get("content")
-        if not isinstance(content, str) or not content:
+        if not isinstance(content, str) or not content.strip():
             continue
+        items.append((role, content.strip()))
 
-        if last_role is not None and last_role == role and msgs:
-            # append to previous message of same role
-            prev = msgs[-1]
-            prev.content = (prev.content or "") + "\n" + content
-        else:
-            msgs.append(ChatMessage(role=role, content=content))
-            last_role = role
+    # Find the last user message index
+    last_user_idx = -1
+    for i in range(len(items) - 1, -1, -1):
+        if items[i][0] == "user":
+            last_user_idx = i
+            break
 
-    # If the conversation is long, keep only the most recent turns so upstream
-    # models see a compact, relevant context. Preserve the system summary if
-    # present and then truncate the remaining messages to the configured
-    # `UI_CHAT_SUMMARY_KEEP_LAST_MESSAGES` value.
+    # Build context lines from all messages except the chosen last user prompt.
+    context_lines: list[str] = []
+    for i, (role, content) in enumerate(items):
+        if i == last_user_idx:
+            continue
+        context_lines.append(f"{role}: {content}")
+
+    # Truncate context lines to configured keep size to bound upstream tokens.
     try:
         keep_n = _summary_keep_last_messages()
     except Exception:
         keep_n = 12
+    if len(context_lines) > keep_n:
+        context_lines = context_lines[-keep_n:]
 
-    # Preserve system summary at msgs[0] when present
-    start_idx = 1 if convo.summary else 0
-    if len(msgs) - start_idx > keep_n:
-        tail = msgs[start_idx:]
-        tail = tail[-keep_n:]
-        msgs = msgs[:start_idx] + tail
+    if context_lines:
+        ctx = "Previous messages (for context only). Do NOT answer these directly:\n" + "\n".join(context_lines)
+        msgs.append(ChatMessage(role="system", content=ctx))
+
+    # Append the most recent user message as the sole user prompt the model
+    # should answer to. If no user message exists, fall back to the last
+    # available message.
+    if last_user_idx != -1:
+        msgs.append(ChatMessage(role="user", content=items[last_user_idx][1]))
+    elif items:
+        last_role, last_content = items[-1]
+        msgs.append(ChatMessage(role=last_role, content=last_content))
 
     return msgs
 
@@ -1215,19 +1227,50 @@ def _conversation_payload_to_chat_messages(convo: Dict[str, Any]) -> list[ChatMe
             msgs.append(ChatMessage(role=role, content=content))
             last_role = role
 
-    # Truncate to most recent turns to avoid sending excessive, irrelevant
-    # history to upstream models. Preserve any system summary and keep only
-    # the last N messages as configured.
+    # Fold prior messages into a single system context message and present
+    # only the last user message as the user prompt to ensure the model directs
+    # its reply to the most recent input while still having prior context.
+    raw_messages = convo.get("messages")
+    items: list[tuple[str, str]] = []
+    for item in raw_messages:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("type") or "") == "image":
+            continue
+        role = str(item.get("role") or "").strip() or "user"
+        content = item.get("content")
+        if not isinstance(content, str) or not content.strip():
+            continue
+        items.append((role, content.strip()))
+
+    last_user_idx = -1
+    for i in range(len(items) - 1, -1, -1):
+        if items[i][0] == "user":
+            last_user_idx = i
+            break
+
+    context_lines: list[str] = []
+    for i, (role, content) in enumerate(items):
+        if i == last_user_idx:
+            continue
+        context_lines.append(f"{role}: {content}")
+
     try:
         keep_n = _summary_keep_last_messages()
     except Exception:
         keep_n = 12
+    if len(context_lines) > keep_n:
+        context_lines = context_lines[-keep_n:]
 
-    start_idx = 1 if summary else 0
-    if len(msgs) - start_idx > keep_n:
-        tail = msgs[start_idx:]
-        tail = tail[-keep_n:]
-        msgs = msgs[:start_idx] + tail
+    if context_lines:
+        ctx = "Previous messages (for context only). Do NOT answer these directly:\n" + "\n".join(context_lines)
+        msgs.append(ChatMessage(role="system", content=ctx))
+
+    if last_user_idx != -1:
+        msgs.append(ChatMessage(role="user", content=items[last_user_idx][1]))
+    elif items:
+        last_role, last_content = items[-1]
+        msgs.append(ChatMessage(role=last_role, content=last_content))
 
     return msgs
 
