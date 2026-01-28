@@ -1128,6 +1128,53 @@ async def ui_api_create_user(req: Request):
     return JSONResponse({"ok": True, "user": {"id": user.id, "username": user.username, "admin": getattr(user, "admin", False)}})
 
 
+@router.post("/ui/api/users/bulk", include_in_schema=False)
+async def ui_api_bulk_users(req: Request):
+    _require_ui_access(req)
+    _require_admin(req)
+    body = await req.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="body must be an object")
+    action = str(body.get("action") or "").strip().lower()
+    users = body.get("users")
+    if not action:
+        raise HTTPException(status_code=400, detail="action required")
+    if not isinstance(users, list) or not users:
+        raise HTTPException(status_code=400, detail="users required")
+
+    password = body.get("password")
+    confirm = str(body.get("confirm") or "").strip().lower()
+    results = []
+    for raw in users:
+        username = str(raw or "").strip()
+        if not username:
+            results.append({"username": "", "ok": False, "error": "username required"})
+            continue
+        try:
+            if action == "activate":
+                user_store.disable_user(S.USER_DB_PATH, username=username, disabled=False)
+            elif action == "deactivate":
+                user_store.disable_user(S.USER_DB_PATH, username=username, disabled=True)
+            elif action == "admin":
+                user_store.set_admin(S.USER_DB_PATH, username=username, admin=True)
+            elif action == "non-admin":
+                user_store.set_admin(S.USER_DB_PATH, username=username, admin=False)
+            elif action == "delete":
+                if confirm != "delete":
+                    raise ValueError("delete confirmation required")
+                user_store.delete_user(S.USER_DB_PATH, username=username)
+            elif action == "reset-password":
+                if not isinstance(password, str) or not password:
+                    raise ValueError("password required")
+                user_store.set_password(S.USER_DB_PATH, username=username, password=password)
+            else:
+                raise ValueError("unknown action")
+            results.append({"username": username, "ok": True})
+        except ValueError as e:
+            results.append({"username": username, "ok": False, "error": str(e)})
+    return JSONResponse({"ok": True, "action": action, "results": results})
+
+
 @router.get("/ui/api/auth/me", include_in_schema=False)
 async def ui_auth_me(req: Request) -> Dict[str, Any]:
     _require_ui_access(req)

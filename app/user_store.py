@@ -232,6 +232,16 @@ def disable_user(db_path: str, *, username: str, disabled: bool = True) -> None:
         raise ValueError("user not found")
 
 
+def delete_user(db_path: str, *, username: str) -> None:
+    uname = (username or "").strip().lower()
+    conn = _db(db_path)
+    cur = conn.execute("DELETE FROM users WHERE username=?", (uname,))
+    conn.commit()
+    conn.close()
+    if cur.rowcount == 0:
+        raise ValueError("user not found")
+
+
 def list_users(db_path: str) -> List[User]:
     conn = _db(db_path)
     rows = conn.execute("SELECT id, username, disabled, admin FROM users ORDER BY username ASC").fetchall()
