@@ -892,11 +892,13 @@
         thinkingLine.textContent = "Synthesizing speech…";
         assistant.contentEl.appendChild(thinkingLine);
 
+        const ttsBody = { text: prompt };
+        try { if (userSettings && userSettings.ttsVoice) ttsBody.voice = String(userSettings.ttsVoice); } catch (e) {}
         const resp = await fetch("/ui/api/tts", {
           method: "POST",
           credentials: "same-origin",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text: prompt }),
+          body: JSON.stringify(ttsBody),
         });
 
         if (handle401(resp)) return;

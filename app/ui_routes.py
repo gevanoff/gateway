@@ -1449,7 +1449,23 @@ async def ui_chat_stream(req: Request):
                     try:
                         from app.tts_backend import generate_tts
 
-                        res = await generate_tts(backend_class=backend_class, body={"text": prompt})
+                        # Include authenticated user's preferred TTS voice if available
+                        tts_body = {"text": prompt}
+                        try:
+                            if user is not None:
+                                settings = user_store.get_settings(S.USER_DB_PATH, user_id=user.id) or {}
+                                voice = None
+                                try:
+                                    voice = (settings.get("tts") or {}).get("voice") if isinstance(settings, dict) else None
+                                except Exception:
+                                    voice = None
+                                if isinstance(voice, str) and voice:
+                                    tts_body["voice"] = voice
+                        except Exception:
+                            # ignore settings lookup failures and fallback to default
+                            pass
+
+                        res = await generate_tts(backend_class=backend_class, body=tts_body)
                     finally:
                         admission.release(backend_class, "tts")
 
