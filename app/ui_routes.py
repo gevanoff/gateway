@@ -1170,8 +1170,9 @@ async def ui_api_bulk_users(req: Request):
             else:
                 raise ValueError("unknown action")
             results.append({"username": username, "ok": True})
-        except ValueError as e:
-            results.append({"username": username, "ok": False, "error": str(e)})
+        except ValueError:
+            # Do not expose internal exception messages to the client.
+            results.append({"username": username, "ok": False, "error": "invalid request"})
     return JSONResponse({"ok": True, "action": action, "results": results})
 
 
