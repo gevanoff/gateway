@@ -134,14 +134,37 @@
         tbody.innerHTML = '';
         users.forEach((u)=>{
           const tr = document.createElement('tr');
-          const statusClass = u.disabled ? 'disabled' : 'active';
-          const statusLabel = u.disabled ? 'Disabled' : 'Active';
-          tr.innerHTML = `
-            <td><input type="checkbox" class="user-check" data-username="${u.username}"/></td>
-            <td>${u.username}</td>
-            <td><span class="status ${statusClass}">${statusLabel}</span></td>
-            <td>${u.admin ? '<span class="status admin">Admin</span>' : '<span class="muted">Member</span>'}</td>
-          `;
+          
+          // Checkbox column
+          const tdCheck = document.createElement('td');
+          const checkbox = document.createElement('input');
+          checkbox.type = 'checkbox';
+          checkbox.className = 'user-check';
+          checkbox.setAttribute('data-username', u.username);
+          tdCheck.appendChild(checkbox);
+          tr.appendChild(tdCheck);
+          
+          // Username column
+          const tdUser = document.createElement('td');
+          tdUser.textContent = u.username;
+          tr.appendChild(tdUser);
+          
+          // Status column
+          const tdStatus = document.createElement('td');
+          const statusSpan = document.createElement('span');
+          statusSpan.className = u.disabled ? 'status disabled' : 'status active';
+          statusSpan.textContent = u.disabled ? 'Disabled' : 'Active';
+          tdStatus.appendChild(statusSpan);
+          tr.appendChild(tdStatus);
+          
+          // Roles column
+          const tdRole = document.createElement('td');
+          const roleSpan = document.createElement('span');
+          roleSpan.className = u.admin ? 'status admin' : 'muted';
+          roleSpan.textContent = u.admin ? 'Admin' : 'Member';
+          tdRole.appendChild(roleSpan);
+          tr.appendChild(tdRole);
+          
           tbody.appendChild(tr);
         });
       }
