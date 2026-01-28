@@ -11,7 +11,7 @@ import re
 import secrets
 import time
 from pathlib import Path
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Dict, Literal, Optional, Tuple
 
 import httpx
 from app.httpx_client import httpx_client as _httpx_client
@@ -701,6 +701,7 @@ async def ui_api_video(req: Request) -> Dict[str, Any]:
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="body must be an object")
 
+    request_id = getattr(req.state, "request_id", "")
     base = (getattr(S, "SKYREELS_BASE_URL", "") or "").strip().rstrip("/")
     if not base:
         raise HTTPException(status_code=404, detail="SkyReels base URL not configured")
@@ -715,15 +716,112 @@ async def ui_api_video(req: Request) -> Dict[str, Any]:
     except Exception:
         timeout = 3600.0
 
+    payload = _normalize_skyreels_payload(body)
+    logger.info(
+        "Video UI request forwarding request_id=%s base=%s path=%s payload_keys=%s",
+        request_id,
+        base,
+        path,
+        sorted(payload.keys()),
+    )
+
+    headers = {}
+    if request_id:
+        headers["X-Request-Id"] = request_id
+
     async with httpx.AsyncClient(timeout=timeout) as client:
-        resp = await client.post(f"{base}{path}", json=body)
+        try:
+            resp = await client.post(f"{base}{path}", json=payload, headers=headers)
+        except httpx.RequestError as exc:
+            logger.warning(
+                "SkyReels request error request_id=%s base=%s path=%s error=%s",
+                request_id,
+                base,
+                path,
+                exc,
+            )
+            raise HTTPException(
+                status_code=502,
+                detail={
+                    "error": "skyreels_request_failed",
+                    "message": str(exc),
+                    "request_id": request_id,
+                },
+            )
+
         try:
             data = resp.json()
         except Exception:
             data = {"raw": resp.text}
+
         if resp.status_code >= 400:
-            raise HTTPException(status_code=resp.status_code, detail=data)
+            logger.warning(
+                "SkyReels upstream error request_id=%s status=%s body=%s",
+                request_id,
+                resp.status_code,
+                data,
+            )
+            raise HTTPException(
+                status_code=resp.status_code,
+                detail={
+                    "error": "skyreels_upstream_error",
+                    "status_code": resp.status_code,
+                    "body": data,
+                    "request_id": request_id,
+                },
+            )
         return data
+
+
+def _normalize_skyreels_payload(body: Dict[str, Any]) -> Dict[str, Any]:
+    ui_keys = {"prompt", "duration", "resolution"}
+    payload: Dict[str, Any]
+    if set(body.keys()).issubset(ui_keys):
+        payload = dict(body)
+        prompt = str(body.get("prompt", "") or "").strip()
+        if prompt:
+            payload["prompt"] = prompt
+        duration = body.get("duration")
+        if duration is not None:
+            try:
+                payload["duration_seconds"] = max(1, int(duration))
+            except Exception:
+                pass
+        width_height = _parse_resolution(body.get("resolution"))
+        if width_height:
+            payload["width"], payload["height"] = width_height
+        return payload
+
+    payload = dict(body)
+    if "duration" in payload and "duration_seconds" not in payload:
+        try:
+            payload["duration_seconds"] = max(1, int(payload.get("duration", 0)))
+        except Exception:
+            pass
+    if "resolution" in payload and ("width" not in payload or "height" not in payload):
+        width_height = _parse_resolution(payload.get("resolution"))
+        if width_height:
+            payload.setdefault("width", width_height[0])
+            payload.setdefault("height", width_height[1])
+    return payload
+
+
+def _parse_resolution(resolution: Any) -> Optional[Tuple[int, int]]:
+    if not resolution:
+        return None
+    text = str(resolution).strip().lower()
+    if "x" in text:
+        parts = text.split("x", 1)
+        try:
+            return int(parts[0]), int(parts[1])
+        except Exception:
+            return None
+    presets = {
+        "480p": (854, 480),
+        "720p": (1280, 720),
+        "1080p": (1920, 1080),
+    }
+    return presets.get(text)
 
 
 @router.post("/ui/api/personaplex/chat", include_in_schema=False)
