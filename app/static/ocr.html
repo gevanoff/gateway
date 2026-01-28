@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+      <link rel="icon" href="/static/ai-infra.png" />
+      <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32.png" />
+      <link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16.png" />
+      <link rel="manifest" href="/static/site.webmanifest">
+      <link rel="mask-icon" href="/static/safari-pinned-tab.svg" color="#2563eb" />
+      <meta name="msapplication-TileColor" content="#0b0d10">
+      <meta name="msapplication-config" content="/static/browserconfig.xml">
+      <meta name="theme-color" content="#0b0d10">
+    <title>Gateway OCR UI</title>
+    <style>
+      :root { color-scheme: dark; }
+      body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; background: #0b0d10; color: #e7edf6; }
+      main { max-width: 900px; margin: 0 auto; padding: 16px; }
+      header { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom: 12px; }
+      h1 { margin: 0; font-size: 16px; font-weight: 650; }
+      .hint { font-size: 12px; color: #a9b4c3; }
+      a { color: #9ac2ff; text-decoration: none; }
+      a:hover { text-decoration: underline; }
+
+      .card { border: 1px solid rgba(231,237,246,0.12); background: #0e1217; border-radius: 12px; padding: 12px; }
+      .row { display:flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+      .row > * { flex: 0 0 auto; }
+
+      label { display:flex; flex-direction:column; gap:6px; width: 100%; }
+      label span { font-size: 12px; color: #a9b4c3; }
+      input, textarea, button { font: inherit; }
+      input, textarea { box-sizing: border-box; padding: 10px; border-radius: 10px; border: 1px solid rgba(231,237,246,0.12); background: #12161c; color: #e7edf6; }
+      textarea { width: 100%; resize: vertical; min-height: 160px; }
+      button { padding: 10px 12px; border-radius: 10px; border: 1px solid rgba(231,237,246,0.14); background: #12161c; color: #e7edf6; cursor: pointer; }
+      button:disabled { opacity: 0.6; cursor: default; }
+
+      .pill { display:inline-flex; gap:8px; align-items:center; padding: 6px 10px; border: 1px solid rgba(231,237,246,0.12); border-radius: 999px; background: rgba(231,237,246,0.03); }
+      .out { margin-top: 12px; }
+      pre { margin: 0; white-space: pre-wrap; word-break: break-word; font-size: 12px; color: #c6d2e4; }
+      .error { color: #ffb4b4; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <div>
+          <h1>Gateway OCR UI</h1>
+          <div class="hint">Tokenless UI gated by <code>UI_IP_ALLOWLIST</code>. Calls <code>/ui/api/scan</code>.</div>
+        </div>
+        <div class="row">
+          <a class="pill" href="/ui">Back to Chat</a>
+        </div>
+      </header>
+
+      <section class="card">
+        <label>
+          <span>Image URL</span>
+          <input id="imageUrl" type="url" placeholder="https://example.org/photo.jpg" />
+        </label>
+        <div class="row" style="margin-top:12px; justify-content:space-between;">
+          <div id="status" class="hint"></div>
+          <button id="run" type="button">Run OCR</button>
+        </div>
+      </section>
+
+      <section class="out" style="margin-top:12px">
+        <div class="card">
+          <div class="hint" style="margin-bottom: 8px;">OCR Output</div>
+          <pre id="output">Waiting for input.</pre>
+        </div>
+      </section>
+
+      <section class="out" style="margin-top:12px">
+        <details class="card">
+          <summary>Last request/response</summary>
+          <pre id="debug"></pre>
+        </details>
+      </section>
+    </main>
+
+    <script src="/static/ocr.js?v=1"></script>
+  </body>
+</html>

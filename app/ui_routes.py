@@ -631,6 +631,18 @@ async def ui_video_frontend(req: Request) -> HTMLResponse:
     return HTMLResponse(html_path.read_text(encoding="utf-8"))
 
 
+@router.get("/ui/ocr", include_in_schema=False)
+async def ui_ocr_frontend(req: Request) -> HTMLResponse:
+    _require_ui_access(req)
+    html_path = Path(__file__).with_name("static").joinpath("ocr.html")
+    return HTMLResponse(html_path.read_text(encoding="utf-8"))
+
+
+@router.get("/ui/scan", include_in_schema=False)
+async def ui_scan_frontend(req: Request) -> HTMLResponse:
+    return await ui_ocr_frontend(req)
+
+
 @router.get("/ui/tts", include_in_schema=False)
 async def ui_tts_frontend(req: Request) -> HTMLResponse:
     _require_ui_access(req)
