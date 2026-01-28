@@ -2,6 +2,7 @@
   const $ = (id) => document.getElementById(id);
 
   const textEl = $("text");
+  const backendEl = $("backend");
   const voiceEl = $("voice");
   const speedEl = $("speed");
   const generateEl = $("generate");
@@ -36,11 +37,13 @@
     const text = String(textEl.value || "").trim();
     if (!text) throw new Error("text is required");
 
+    const backendClass = String(backendEl?.value || "").trim();
     const voice = String(voiceEl.value || "").trim();
     const speedRaw = parseFloat(String(speedEl.value || "1"));
     const speed = Number.isFinite(speedRaw) ? Math.min(2, Math.max(0.5, speedRaw)) : 1;
 
     const body = { text, speed };
+    if (backendClass) body.backend_class = backendClass;
     if (voice) body.voice = voice;
 
     return body;
@@ -49,7 +52,9 @@
   async function loadVoices() {
     if (!voiceEl) return;
     try {
-      const resp = await fetch('/ui/api/tts/voices', { method: 'GET', credentials: 'same-origin' });
+      const backendClass = String(backendEl?.value || "").trim();
+      const qs = backendClass ? `?backend_class=${encodeURIComponent(backendClass)}` : "";
+      const resp = await fetch(`/ui/api/tts/voices${qs}`, { method: 'GET', credentials: 'same-origin' });
       if (!resp.ok) return;
       let payload;
       try {
@@ -86,6 +91,27 @@
       }
     } catch (e) {
       // ignore failures; voices are optional
+    }
+  }
+
+  async function loadBackends() {
+    if (!backendEl) return;
+    try {
+      const resp = await fetch('/ui/api/tts/backends', { method: 'GET', credentials: 'same-origin' });
+      if (!resp.ok) return;
+      const payload = await resp.json();
+      const list = Array.isArray(payload?.available_backends) ? payload.available_backends : [];
+      backendEl.innerHTML = '<option value="">(default)</option>';
+      for (const item of list) {
+        const val = item?.backend_class;
+        if (!val) continue;
+        const opt = document.createElement('option');
+        opt.value = val;
+        opt.textContent = item?.description ? `${val} — ${item.description}` : String(val);
+        backendEl.appendChild(opt);
+      }
+    } catch (e) {
+      // ignore
     }
   }
 
@@ -325,12 +351,25 @@
     }
   }
 
-  // Load available voices, apply saved setting (server or localStorage), and bind UI handlers.
+  // Load available backends/voices, apply saved setting (server or localStorage), and bind UI handlers.
   (async () => {
+    await loadBackends();
     await loadVoices();
 
     // Try server-side settings first; fall back to localStorage for unauthenticated users.
     const serverSettings = await loadUserSettings();
+    if (serverSettings && serverSettings.tts && serverSettings.tts.backend_class && backendEl) {
+      try { backendEl.value = serverSettings.tts.backend_class; } catch (e) {}
+      await loadVoices();
+    } else if (backendEl) {
+      try {
+        const savedBackend = localStorage.getItem('gw_ui_tts_backend');
+        if (savedBackend) {
+          backendEl.value = savedBackend;
+          await loadVoices();
+        }
+      } catch (e) {}
+    }
     if (serverSettings && serverSettings.tts && serverSettings.tts.voice && voiceEl) {
       try { voiceEl.value = serverSettings.tts.voice; } catch (e) {}
     } else {
@@ -338,6 +377,17 @@
         const saved = localStorage.getItem('gw_ui_tts_voice');
         if (saved && voiceEl) voiceEl.value = saved;
       } catch (e) {}
+    }
+
+    if (backendEl) {
+      backendEl.addEventListener('change', async () => {
+        const backendClass = String(backendEl.value || '').trim();
+        await loadVoices();
+        const ok = await saveUserSettings({ tts: { backend_class: backendClass } });
+        if (!ok) {
+          try { localStorage.setItem('gw_ui_tts_backend', backendClass); } catch (e) {}
+        }
+      });
     }
 
     if (voiceEl) {

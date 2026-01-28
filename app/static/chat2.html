@@ -97,6 +97,7 @@
               <a class="menu-item" href="/ui/image">Image UI</a>
               <a class="menu-item" href="/ui/music">Music UI</a>
               <a class="menu-item" href="/ui/video">Video UI</a>
+              <a class="menu-item" href="/ui/personaplex">PersonaPlex UI</a>
               <a class="menu-item" href="/ui/tts">Text-to-speech</a>
               <a class="menu-item" href="/ui/ocr">OCR / Scan</a>
               <div class="menu-sep"></div>
@@ -128,7 +129,7 @@
             <li><strong>/music</strong> — generate short music clips via the Music UI/API. Works: try <code>/music chill lo-fi beat</code> or open <a href="/ui/music">Music UI</a>.</li>
             <li><strong>/speech</strong> (or use the Text-to-Speech UI) — synthesize audio via TTS backends. Works: open <a href="/ui/tts">Text-to-speech</a> or use the TTS controls after chat output.</li>
             <li><strong>/scan</strong> — run OCR against an image URL (LightOnOCR). Works: <code>/scan https://example.org/photo.jpg</code> or open <a href="/ui/ocr">OCR UI</a> if available.</li>
-            <li><strong>/video</strong> — video generation UI (placeholder). Status: stub — frontend present at <a href="/ui/video">Video UI</a> but no backend API implemented yet.</li>
+            <li><strong>/video</strong> — video generation UI via SkyReels-V2. Open <a href="/ui/video">Video UI</a>.</li>
           </ul>
           <div class="hint" style="margin-top:6px">Notes: Chat commands require that the UI is reachable (see <code>UI_IP_ALLOWLIST</code>) and you may need to be authenticated for persisted storage.</div>
         </div>
@@ -145,6 +146,9 @@
         </header>
         <form id="settingsForm">
           <div style="display:flex;flex-direction:column;gap:8px">
+            <label>Preferred TTS backend
+              <select id="settings_tts_backend"><option value="">(default)</option></select>
+            </label>
             <label>Preferred TTS voice
               <select id="settings_tts_voice"><option value="">(default)</option></select>
             </label>

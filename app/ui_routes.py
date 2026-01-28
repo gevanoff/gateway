@@ -21,7 +21,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.responses import JSONResponse
 from fastapi.responses import StreamingResponse
 
-from app.backends import check_capability, get_admission_controller, get_registry
+from app.backends import check_capability, get_admission_controller, get_registry, _capability_availability
 from app.config import S
 from app.health_checker import check_backend_ready
 from app.model_aliases import get_aliases
@@ -181,6 +181,47 @@ def _coerce_tts_body(body: Any) -> Dict[str, Any]:
         if not isinstance(alt, str) or not alt.strip():
             raise HTTPException(status_code=400, detail="text is required")
     return body
+
+
+def _resolve_tts_backend_class(req: Request, body: Optional[Dict[str, Any]] = None, *, explicit: Optional[str] = None) -> str:
+    backend_class = (explicit or "").strip()
+    if not backend_class and isinstance(body, dict):
+        try:
+            backend_class = str(body.get("backend_class") or body.get("backend") or "").strip()
+        except Exception:
+            backend_class = ""
+
+    if not backend_class:
+        try:
+            user = _require_user(req)
+        except HTTPException:
+            user = None
+        if user is not None:
+            try:
+                settings = user_store.get_settings(S.USER_DB_PATH, user_id=user.id) or {}
+                tts = settings.get("tts") if isinstance(settings, dict) else None
+                if isinstance(tts, dict):
+                    backend_class = str(tts.get("backend_class") or tts.get("backend") or "").strip()
+                if not backend_class:
+                    backend_class = str(settings.get("tts_backend") or settings.get("ttsBackend") or "").strip()
+            except Exception:
+                backend_class = ""
+
+    if not backend_class:
+        backend_class = (getattr(S, "TTS_BACKEND_CLASS", "") or "").strip() or "pocket_tts"
+
+    reg = get_registry()
+    cfg = reg.get_backend(backend_class)
+    if not cfg or not cfg.supports("tts"):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "tts_backend_unavailable",
+                "backend_class": backend_class,
+                **_capability_availability("tts"),
+            },
+        )
+    return cfg.backend_class
 
 
 def _tts_gateway_headers(meta: Dict[str, Any]) -> Dict[str, str]:
@@ -485,6 +526,13 @@ async def ui_tts_frontend(req: Request) -> HTMLResponse:
     return HTMLResponse(html_path.read_text(encoding="utf-8"))
 
 
+@router.get("/ui/personaplex", include_in_schema=False)
+async def ui_personaplex_frontend(req: Request) -> HTMLResponse:
+    _require_ui_access(req)
+    html_path = Path(__file__).with_name("static").joinpath("personaplex.html")
+    return HTMLResponse(html_path.read_text(encoding="utf-8"))
+
+
 @router.get("/ui/admin/users", include_in_schema=False)
 async def ui_admin_users(req: Request) -> HTMLResponse:
     _require_ui_access(req)
@@ -512,6 +560,75 @@ async def ui_api_music(req: Request) -> Dict[str, Any]:
     return out
 
 
+@router.post("/ui/api/video", include_in_schema=False)
+async def ui_api_video(req: Request) -> Dict[str, Any]:
+    _require_ui_access(req)
+    _require_user(req)
+    body = await req.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="body must be an object")
+
+    base = (getattr(S, "SKYREELS_BASE_URL", "") or "").strip().rstrip("/")
+    if not base:
+        raise HTTPException(status_code=404, detail="SkyReels base URL not configured")
+
+    path = (getattr(S, "SKYREELS_GENERATE_PATH", "") or "/v1/videos/generations").strip()
+    if not path.startswith("/"):
+        path = "/" + path
+
+    timeout = getattr(S, "SKYREELS_TIMEOUT_SEC", 3600.0) or 3600.0
+    try:
+        timeout = float(timeout)
+    except Exception:
+        timeout = 3600.0
+
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        resp = await client.post(f"{base}{path}", json=body)
+        try:
+            data = resp.json()
+        except Exception:
+            data = {"raw": resp.text}
+        if resp.status_code >= 400:
+            raise HTTPException(status_code=resp.status_code, detail=data)
+        return data
+
+
+@router.post("/ui/api/personaplex/chat", include_in_schema=False)
+async def ui_api_personaplex_chat(req: Request) -> Dict[str, Any]:
+    _require_ui_access(req)
+    _require_user(req)
+    body = await req.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="body must be an object")
+
+    base = (getattr(S, "PERSONAPLEX_BASE_URL", "") or "").strip().rstrip("/")
+    if not base:
+        raise HTTPException(status_code=404, detail="PersonaPlex base URL not configured")
+
+    timeout = getattr(S, "PERSONAPLEX_TIMEOUT_SEC", 120.0) or 120.0
+    try:
+        timeout = float(timeout)
+    except Exception:
+        timeout = 120.0
+
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        resp = await client.post(f"{base}/v1/chat/completions", json=body)
+        try:
+            data = resp.json()
+        except Exception:
+            data = {"raw": resp.text}
+        if resp.status_code >= 400:
+            raise HTTPException(status_code=resp.status_code, detail=data)
+        return data
+
+
+@router.get("/ui/api/tts/backends", include_in_schema=False)
+async def ui_api_tts_backends(req: Request) -> Dict[str, Any]:
+    _require_ui_access(req)
+    _require_user(req)
+    return _capability_availability("tts")
+
+
 @router.post("/ui/api/tts", include_in_schema=False)
 async def ui_api_tts(req: Request):
     _require_ui_access(req)
@@ -533,7 +650,7 @@ async def ui_api_tts(req: Request):
     except Exception:
         # best-effort only; fall back to request-provided or backend default
         pass
-    backend_class = (getattr(S, "TTS_BACKEND_CLASS", "") or "").strip() or "pocket_tts"
+    backend_class = _resolve_tts_backend_class(req, body)
 
     check_backend_ready(backend_class, route_kind="tts")
     await check_capability(backend_class, "tts")
@@ -582,7 +699,7 @@ async def ui_api_tts_voices(req: Request):
     _require_ui_access(req)
     _require_user(req)
 
-    backend_class = (getattr(S, "TTS_BACKEND_CLASS", "") or "").strip() or "pocket_tts"
+    backend_class = _resolve_tts_backend_class(req, None, explicit=str(req.query_params.get("backend_class") or "").strip())
     base = _effective_tts_base_url(backend_class=backend_class)
     if not base:
         raise HTTPException(status_code=404, detail="tts backend not configured")

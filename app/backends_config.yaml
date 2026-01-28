@@ -96,6 +96,32 @@ backends:
       readiness: /readyz
     payload_policy: {}
 
+  qwen3_tts:
+    class: qwen3_tts
+    base_url: http://ai2:9175
+    description: Qwen3-TTS shim
+    supported_capabilities:
+      - tts
+    concurrency_limits:
+      tts: 2
+    health:
+      liveness: /health
+      readiness: /readyz
+    payload_policy: {}
+
+  luxtts:
+    class: luxtts
+    base_url: http://ai2:9170
+    description: LuxTTS shim
+    supported_capabilities:
+      - tts
+    concurrency_limits:
+      tts: 2
+    health:
+      liveness: /health
+      readiness: /readyz
+    payload_policy: {}
+
 # Legacy backend names map to backend classes
 legacy_mapping:
   mlx: local_mlx

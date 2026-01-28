@@ -7,6 +7,7 @@
   const generateEl = $("generate");
   const statusEl = $("status");
   const metaEl = $("meta");
+  const previewEl = $("preview");
 
   function setStatus(text, isError) {
     statusEl.textContent = text || "";
@@ -15,6 +16,11 @@
 
   function setMeta(text) {
     metaEl.textContent = text || "";
+  }
+
+  function setPreview(html) {
+    if (!previewEl) return;
+    previewEl.innerHTML = html || "";
   }
 
   function buildRequestPreview() {
@@ -26,9 +32,10 @@
     return { prompt, duration, resolution };
   }
 
-  function handleGenerate() {
+  async function handleGenerate() {
     setStatus("", false);
     setMeta("");
+    setPreview("");
 
     let preview;
     try {
@@ -38,8 +45,43 @@
       return;
     }
 
-    setStatus("Video generation stub: no backend configured yet.", false);
-    setMeta(`Preview request → ${JSON.stringify(preview)}`);
+    generateEl.disabled = true;
+    setStatus("Generating...", false);
+
+    try {
+      const resp = await fetch("/ui/api/video", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(preview),
+      });
+      const text = await resp.text();
+      if (!resp.ok) {
+        setStatus(text, true);
+        return;
+      }
+      let payload;
+      try {
+        payload = JSON.parse(text);
+      } catch {
+        setStatus("Video generation returned non-JSON response.", false);
+        setPreview(`<pre>${text}</pre>`);
+        return;
+      }
+
+      const url = payload?.url || payload?.video_url || payload?.data?.[0]?.url;
+      if (url && typeof url === "string") {
+        setPreview(`<video controls style="max-width:100%" src="${url}"></video>`);
+      } else {
+        setPreview(`<pre>${JSON.stringify(payload, null, 2)}</pre>`);
+      }
+      setMeta(`Status: ${payload?.status || "ok"}`);
+      setStatus("Done.", false);
+    } catch (e) {
+      setStatus(String(e), true);
+    } finally {
+      generateEl.disabled = false;
+    }
   }
 
   generateEl.addEventListener("click", handleGenerate);

@@ -113,6 +113,15 @@ class Settings(BaseSettings):
     TTS_GENERATE_PATH: str = "/v1/audio/speech"
     TTS_BACKEND_CLASS: str = "pocket_tts"
 
+    # Optional: SkyReels-V2 video generation shim
+    SKYREELS_BASE_URL: str = ""
+    SKYREELS_TIMEOUT_SEC: float = 3600.0
+    SKYREELS_GENERATE_PATH: str = "/v1/videos/generations"
+
+    # Optional: PersonaPlex chat shim (custom UI)
+    PERSONAPLEX_BASE_URL: str = ""
+    PERSONAPLEX_TIMEOUT_SEC: float = 120.0
+
     DEFAULT_BACKEND: Literal["ollama", "mlx"] = "ollama"
 
     # Backends can each have "strong" and "fast" model choices.

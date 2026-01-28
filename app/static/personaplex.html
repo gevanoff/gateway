@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>Gateway Video UI</title>
+    <title>PersonaPlex UI</title>
     <style>
       :root { color-scheme: dark; }
       body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; background: #0b0d10; color: #e7edf6; }
@@ -27,6 +27,7 @@
       button:disabled { opacity: 0.6; cursor: default; }
 
       .out { margin-top: 12px; }
+      .response { white-space: pre-wrap; background: #11161d; border-radius: 10px; padding: 12px; border: 1px solid rgba(231,237,246,0.08); }
       .pill { display:inline-flex; gap:8px; align-items:center; padding: 6px 10px; border: 1px solid rgba(231,237,246,0.12); border-radius: 999px; background: rgba(231,237,246,0.03); }
       .error { color: #ffb4b4; }
     </style>
@@ -43,8 +44,8 @@
       <meta name="theme-color" content="#0b0d10">
       <header>
         <div>
-          <h1>Gateway Video UI</h1>
-          <div class="hint">Generate videos via the SkyReels-V2 backend.</div>
+          <h1>PersonaPlex UI</h1>
+          <div class="hint">Custom UI for PersonaPlex chat completions.</div>
         </div>
         <div class="row">
           <a class="pill" href="/ui">Back to Chat</a>
@@ -54,37 +55,40 @@
       <section class="card">
         <div class="row" style="justify-content:space-between">
           <label style="min-width: 320px; flex: 1 1 640px;">
-            <span>Prompt</span>
-            <textarea id="prompt" placeholder="Describe the video you want to generate"></textarea>
+            <span>Persona / System Prompt</span>
+            <textarea id="persona" placeholder="Describe the persona or system behavior"></textarea>
+          </label>
+        </div>
+
+        <div class="row" style="justify-content:space-between; margin-top: 12px">
+          <label style="min-width: 320px; flex: 1 1 640px;">
+            <span>User Message</span>
+            <textarea id="message" placeholder="Ask PersonaPlex something"></textarea>
           </label>
         </div>
 
         <div class="row" style="margin-top:12px">
           <label>
-            <span>Duration (sec)</span>
-            <input id="duration" type="number" min="1" max="30" step="1" value="6" />
-            <span class="hint">Range: 1-30</span>
+            <span>Temperature</span>
+            <input id="temperature" type="number" min="0" max="2" step="0.1" value="0.7" />
           </label>
 
           <label>
-            <span>Resolution</span>
-            <select id="resolution">
-              <option value="720p" selected>720p</option>
-              <option value="1080p">1080p</option>
-            </select>
+            <span>Max Tokens</span>
+            <input id="maxTokens" type="number" min="1" max="4096" step="1" value="512" />
           </label>
 
-          <button id="generate" type="button">Generate</button>
+          <button id="send" type="button">Send</button>
         </div>
 
         <div class="out">
           <div id="status" class="hint"></div>
           <div id="meta" class="hint" style="margin-top: 8px"></div>
-          <div id="preview" style="margin-top: 12px"></div>
+          <div id="response" class="response" style="margin-top: 12px"></div>
         </div>
       </section>
     </main>
 
-    <script src="/static/video.js?v=1"></script>
+    <script src="/static/personaplex.js?v=1"></script>
   </body>
 </html>

@@ -264,7 +264,7 @@
     }
 
     // User settings management
-    let userSettings = { ttsVoice: "", showTimestamps: false, audioVolume: 1.0, autoPlayTTS: false, systemPrompt: "", profileTone: "" };
+    let userSettings = { ttsVoice: "", ttsBackend: "", showTimestamps: false, audioVolume: 1.0, autoPlayTTS: false, systemPrompt: "", profileTone: "" };
 
     async function loadUserSettings() {
       try {
@@ -274,6 +274,7 @@
         const s = payload?.settings || {};
         userSettings = {
           ttsVoice: s.tts?.voice || s.tts_voice || s.ttsVoice || "",
+          ttsBackend: s.tts?.backend_class || s.tts?.backend || s.tts_backend || s.ttsBackend || "",
           showTimestamps: !!(s.ui && s.ui.showTimestamps || s.showTimestamps),
           audioVolume: typeof s.audioVolume === 'number' ? s.audioVolume : (s.audio && typeof s.audio.volume === 'number' ? s.audio.volume : (s.audioVolume || 1.0)),
           autoPlayTTS: !!(s.audio && s.audio.autoPlayTTS || s.autoPlayTTS),
@@ -297,13 +298,33 @@
       // populate form
       (async () => {
         await loadUserSettings();
+        const backendSelect = document.getElementById('settings_tts_backend');
         const select = document.getElementById('settings_tts_voice');
         const showTs = document.getElementById('settings_show_timestamps');
         const vol = document.getElementById('settings_audio_volume');
         const autoplay = document.getElementById('settings_autoplay_tts');
         // populate voice list if available from TTS voices endpoint
         try {
-          const r = await fetch('/ui/api/tts/voices', { method: 'GET', credentials: 'same-origin' });
+          if (backendSelect) {
+            try {
+              const b = await fetch('/ui/api/tts/backends', { method: 'GET', credentials: 'same-origin' });
+              if (b.ok) {
+                const payload = await b.json();
+                const list = Array.isArray(payload?.available_backends) ? payload.available_backends : [];
+                backendSelect.innerHTML = '<option value="">(default)</option>';
+                for (const item of list) {
+                  if (!item?.backend_class) continue;
+                  const opt = document.createElement('option');
+                  opt.value = item.backend_class;
+                  opt.textContent = item.description ? `${item.backend_class} — ${item.description}` : String(item.backend_class);
+                  backendSelect.appendChild(opt);
+                }
+              }
+            } catch (e) {}
+          }
+          const backendClass = backendSelect ? String(backendSelect.value || userSettings.ttsBackend || '').trim() : String(userSettings.ttsBackend || '').trim();
+          const qs = backendClass ? `?backend_class=${encodeURIComponent(backendClass)}` : '';
+          const r = await fetch(`/ui/api/tts/voices${qs}`, { method: 'GET', credentials: 'same-origin' });
           if (r.ok) {
             const voices = await r.json();
             if (Array.isArray(voices) && select) {
@@ -320,6 +341,30 @@
           }
         } catch (e) {}
 
+        if (backendSelect) {
+          backendSelect.value = userSettings.ttsBackend || "";
+          backendSelect.onchange = async () => {
+            try {
+              const backendClass = String(backendSelect.value || '').trim();
+              const qs = backendClass ? `?backend_class=${encodeURIComponent(backendClass)}` : '';
+              const r = await fetch(`/ui/api/tts/voices${qs}`, { method: 'GET', credentials: 'same-origin' });
+              if (r.ok) {
+                const voices = await r.json();
+                if (Array.isArray(voices) && select) {
+                  select.innerHTML = '<option value="">(default)</option>';
+                  for (const v of voices) {
+                    try {
+                      const opt = document.createElement('option');
+                      opt.value = String(v);
+                      opt.textContent = String(v);
+                      select.appendChild(opt);
+                    } catch (e) {}
+                  }
+                }
+              }
+            } catch (e) {}
+          };
+        }
         if (select) select.value = userSettings.ttsVoice || "";
         if (showTs) showTs.checked = !!userSettings.showTimestamps;
         if (vol) vol.value = String(Number(userSettings.audioVolume || 1));
@@ -366,6 +411,7 @@
     }
 
     async function saveSettingsFromModal() {
+      const backendSelect = document.getElementById('settings_tts_backend');
       const select = document.getElementById('settings_tts_voice');
       const showTs = document.getElementById('settings_show_timestamps');
       const vol = document.getElementById('settings_audio_volume');
@@ -376,7 +422,7 @@
       const newPwd = document.getElementById('settings_new_password');
       const confirmPwd = document.getElementById('settings_confirm_password');
       const newSettings = {
-        tts: { voice: select ? select.value : "" },
+        tts: { voice: select ? select.value : "", backend_class: backendSelect ? backendSelect.value : "" },
         ui: { showTimestamps: !!(showTs && showTs.checked) },
         audioVolume: vol ? Number(vol.value) : 1.0,
         autoPlayTTS: !!(autoplay && autoplay.checked),
@@ -413,6 +459,7 @@
         }
         // update local copy
         userSettings.ttsVoice = newSettings.tts.voice || "";
+        userSettings.ttsBackend = newSettings.tts.backend_class || "";
         userSettings.showTimestamps = !!newSettings.ui.showTimestamps;
         userSettings.audioVolume = Number(newSettings.audioVolume || 1.0);
         userSettings.autoPlayTTS = !!newSettings.autoPlayTTS;
@@ -969,6 +1016,7 @@
 
         const ttsBody = { text: prompt };
         try { if (userSettings && userSettings.ttsVoice) ttsBody.voice = String(userSettings.ttsVoice); } catch (e) {}
+        try { if (userSettings && userSettings.ttsBackend) ttsBody.backend_class = String(userSettings.ttsBackend); } catch (e) {}
         const resp = await fetch("/ui/api/tts", {
           method: "POST",
           credentials: "same-origin",
