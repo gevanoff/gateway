@@ -38,6 +38,35 @@ from app import user_store
 router = APIRouter()
 
 
+@router.get("/favicon.ico", include_in_schema=False)
+async def ui_favicon(req: Request):
+    # Serve a root /favicon.ico so browsers that request it directly get our icon.
+    try:
+        here = os.path.dirname(__file__)
+        path = os.path.join(here, "static", "favicon.ico")
+        if not os.path.exists(path):
+            raise HTTPException(status_code=404, detail="not found")
+        return FileResponse(path, media_type="image/x-icon", headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=500, detail="failed to serve favicon")
+
+
+@router.get("/apple-touch-icon.png", include_in_schema=False)
+async def ui_apple_touch(req: Request):
+    try:
+        here = os.path.dirname(__file__)
+        path = os.path.join(here, "static", "apple-touch-icon.png")
+        if not os.path.exists(path):
+            raise HTTPException(status_code=404, detail="not found")
+        return FileResponse(path, media_type="image/png", headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=500, detail="failed to serve apple touch icon")
+
+
 _SAFE_FILE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 
