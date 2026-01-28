@@ -10,6 +10,13 @@
   const saveVoiceEl = $("saveVoice");
   const deleteVoiceEl = $("deleteVoice");
   const presetEl = $("preset");
+  const languageEl = $("language");
+  const refTextEl = $("refText");
+  const refAudioEl = $("refAudio");
+  const xVectorOnlyEl = $("xVectorOnly");
+  const voiceClonePromptEl = $("voiceClonePrompt");
+  const maxNewTokensEl = $("maxNewTokens");
+  const topPEl = $("topP");
   const rmsEl = $("rms");
   const durationEl = $("duration");
   const numStepsEl = $("numSteps");
@@ -22,6 +29,7 @@
   const playerEl = $("player");
 
   let activeObjectUrl = null;
+  let backendCache = [];
 
   function setStatus(text, isError) {
     statusEl.textContent = text || "";
@@ -59,6 +67,7 @@
       if (!resp.ok) return;
       const payload = await resp.json();
       const list = Array.isArray(payload?.available_backends) ? payload.available_backends : [];
+      backendCache = list;
       backendEl.innerHTML = '<option value="">(default)</option>';
       for (const item of list) {
         const val = item?.backend_class;
@@ -69,14 +78,20 @@
         opt.textContent = item?.description ? `${val} — ${item.description} (${health})` : `${val} (${health})`;
         backendEl.appendChild(opt);
       }
-      if (backendHealthEl) {
-        const selected = list.find((b) => b.backend_class === backendEl.value) || list[0];
-        if (selected) {
-          const health = selected?.ready === false ? 'not ready' : (selected?.healthy === false ? 'unhealthy' : 'ready');
-          backendHealthEl.textContent = `${selected.backend_class}: ${health}`;
-        }
-      }
+      updateBackendHealth();
     } catch (e) {}
+  }
+
+  function updateBackendHealth() {
+    if (!backendHealthEl) return;
+    const list = backendCache || [];
+    const selected = list.find((b) => b.backend_class === backendEl.value) || list[0];
+    if (selected) {
+      const health = selected?.ready === false ? 'not ready' : (selected?.healthy === false ? 'unhealthy' : 'ready');
+      backendHealthEl.textContent = `${selected.backend_class}: ${health}`;
+    } else {
+      backendHealthEl.textContent = 'unknown';
+    }
   }
 
   async function loadVoiceLibrary() {
@@ -109,11 +124,28 @@
     if (file) fd.append("prompt_audio", file, file.name);
 
     const voiceId = String(savedVoiceEl?.value || "").trim();
-    if (!file && !voiceId) throw new Error("prompt audio file or saved voice is required");
+    const refAudio = String(refAudioEl?.value || "").trim();
+    const voiceClonePrompt = String(voiceClonePromptEl?.value || "").trim();
+    if (!file && !voiceId && !refAudio && !voiceClonePrompt) {
+      throw new Error("prompt audio file, saved voice, ref_audio, or voice clone prompt is required");
+    }
     if (voiceId) fd.append("voice_id", voiceId);
 
     const voiceName = String(voiceNameEl?.value || "").trim();
     if (voiceName) fd.append("voice_name", voiceName);
+
+    const language = String(languageEl?.value || "").trim();
+    if (language) fd.append("language", language);
+    const refText = String(refTextEl?.value || "").trim();
+    if (refText) fd.append("ref_text", refText);
+    if (refAudio) fd.append("ref_audio", refAudio);
+    if (voiceClonePrompt) fd.append("voice_clone_prompt", voiceClonePrompt);
+    const xVectorOnly = String(xVectorOnlyEl?.value || "").trim();
+    if (xVectorOnly) fd.append("x_vector_only_mode", xVectorOnly);
+    const maxNewTokens = String(maxNewTokensEl?.value || "").trim();
+    if (maxNewTokens) fd.append("max_new_tokens", maxNewTokens);
+    const topP = String(topPEl?.value || "").trim();
+    if (topP) fd.append("top_p", topP);
 
     const backendClass = String(backendEl?.value || "").trim();
     if (backendClass) fd.append("backend_class", backendClass);
@@ -248,7 +280,7 @@
   generateEl.addEventListener('click', handleGenerate);
   if (saveVoiceEl) saveVoiceEl.addEventListener('click', handleSaveVoice);
   if (deleteVoiceEl) deleteVoiceEl.addEventListener('click', handleDeleteVoice);
-  if (backendEl) backendEl.addEventListener('change', loadBackends);
+  if (backendEl) backendEl.addEventListener('change', updateBackendHealth);
   if (presetEl) presetEl.addEventListener('change', applyPreset);
   loadBackends();
   loadVoiceLibrary();

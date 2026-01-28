@@ -883,6 +883,13 @@ async def ui_api_tts_clone(
     backend_class: str = Form(""),
     voice_name: str = Form(""),
     voice_id: str = Form(""),
+    language: Optional[str] = Form(None),
+    ref_text: Optional[str] = Form(None),
+    ref_audio: Optional[str] = Form(None),
+    voice_clone_prompt: Optional[str] = Form(None),
+    x_vector_only_mode: Optional[str] = Form(None),
+    max_new_tokens: Optional[str] = Form(None),
+    top_p: Optional[str] = Form(None),
     rms: Optional[str] = Form(None),
     duration: Optional[str] = Form(None),
     num_steps: Optional[str] = Form(None),
@@ -904,6 +911,20 @@ async def ui_api_tts_clone(
     path = _effective_tts_clone_path(backend)
 
     data: Dict[str, Any] = {"text": str(text)}
+    if language:
+        data["language"] = str(language)
+    if ref_text:
+        data["ref_text"] = str(ref_text)
+    if ref_audio:
+        data["ref_audio"] = str(ref_audio)
+    if voice_clone_prompt:
+        data["voice_clone_prompt"] = str(voice_clone_prompt)
+    if x_vector_only_mode:
+        data["x_vector_only_mode"] = str(x_vector_only_mode)
+    if max_new_tokens:
+        data["max_new_tokens"] = str(max_new_tokens)
+    if top_p:
+        data["top_p"] = str(top_p)
     if rms:
         data["rms"] = str(rms)
     if duration:
@@ -928,16 +949,18 @@ async def ui_api_tts_clone(
         if loaded is not None:
             file_bytes, file_mime = loaded
 
-    if not file_bytes:
-        raise HTTPException(status_code=400, detail="prompt_audio or voice_id is required")
+    if not file_bytes and not ref_audio and not voice_clone_prompt:
+        raise HTTPException(status_code=400, detail="prompt_audio, voice_id, ref_audio, or voice_clone_prompt is required")
 
-    files = {
-        "prompt_audio": (
-            (prompt_audio.filename if prompt_audio is not None else "prompt_audio"),
-            file_bytes,
-            file_mime or "application/octet-stream",
-        )
-    }
+    files = None
+    if file_bytes:
+        files = {
+            "prompt_audio": (
+                (prompt_audio.filename if prompt_audio is not None else "prompt_audio"),
+                file_bytes,
+                file_mime or "application/octet-stream",
+            )
+        }
 
     timeout = getattr(S, "TTS_TIMEOUT_SEC", 120.0) or 120.0
     try:
