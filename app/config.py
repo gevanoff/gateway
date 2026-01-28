@@ -17,6 +17,14 @@ class Settings(BaseSettings):
     GATEWAY_PORT: int = 8800
     GATEWAY_BEARER_TOKEN: str
 
+    # TLS for incoming connections (gateway server)
+    # When both are set, the gateway (uvicorn) can be started with these files
+    # to serve HTTPS directly. Typical production deployments use a reverse
+    # proxy instead; these settings are provided for convenience in tests
+    # or simple single-host deployments.
+    GATEWAY_TLS_CERT_PATH: str = ""
+    GATEWAY_TLS_KEY_PATH: str = ""
+
     # Optional multi-token auth (comma-separated). When set, any listed token is accepted.
     # If empty, falls back to single-token GATEWAY_BEARER_TOKEN.
     GATEWAY_BEARER_TOKENS: str = ""
@@ -159,6 +167,16 @@ class Settings(BaseSettings):
     TOOLS_HTTP_ALLOWED_HOSTS: str = "127.0.0.1,localhost"
     TOOLS_HTTP_TIMEOUT_SEC: int = 10
     TOOLS_HTTP_MAX_BYTES: int = 200_000
+
+    # Outbound/backend TLS verification
+    # - BACKEND_VERIFY_TLS: when false, disable TLS verification for upstreams.
+    # - BACKEND_CA_BUNDLE: path to a CA bundle file to use for upstream verification.
+    # - BACKEND_CLIENT_CERT: optional client cert for mTLS; either a single
+    #   path (PEM containing cert+key) or two paths separated by a comma
+    #   ("cert.pem,key.pem").
+    BACKEND_VERIFY_TLS: bool = True
+    BACKEND_CA_BUNDLE: str = ""
+    BACKEND_CLIENT_CERT: str = ""
 
     # Tool bus JSONL log file path.
     TOOLS_LOG_PATH: str = "/var/lib/gateway/data/tools/invocations.jsonl"

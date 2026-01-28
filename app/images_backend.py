@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Literal, Tuple
 import httpx
 
 from app.config import S
+from app.httpx_client import httpx_client as _httpx_client
 from app.image_storage import convert_response_to_urls
 
 
@@ -276,7 +277,7 @@ async def generate_images(
 
         payload.update(_filtered_options(options))
 
-        async with httpx.AsyncClient(timeout=timeout) as client:
+        async with _httpx_client(timeout=timeout) as client:
             r = await client.post(f"{base}/sdapi/v1/txt2img", json=payload)
             r.raise_for_status()
             out = r.json()
@@ -342,7 +343,7 @@ async def generate_images(
                         guidance_used = None
                     break
 
-        async with httpx.AsyncClient(timeout=timeout) as client:
+        async with _httpx_client(timeout=timeout) as client:
             r = await client.post(f"{base}/v1/images/generations", json=payload)
             r.raise_for_status()
             out = r.json()

@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Dict, Literal, Optional
 
 import httpx
+from app.httpx_client import httpx_client as _httpx_client
 import subprocess
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
@@ -589,7 +590,7 @@ async def ui_api_tts_voices(req: Request):
                 except Exception:
                     continue
 
-    async with httpx.AsyncClient(timeout=10) as client:
+    async with _httpx_client(timeout=10) as client:
         last_err = None
         for p in ("/v1/voices", "/voices"):
             try:
@@ -845,7 +846,7 @@ async def ui_models(req: Request) -> Dict[str, Any]:
     now = now_unix()
     data: Dict[str, Any] = {"object": "list", "data": []}
 
-    async with httpx.AsyncClient(timeout=30) as client:
+    async with _httpx_client(timeout=30) as client:
         try:
             r = await client.get(f"{S.OLLAMA_BASE_URL}/api/tags")
             r.raise_for_status()

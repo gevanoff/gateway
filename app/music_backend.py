@@ -4,6 +4,7 @@ import time
 from typing import Any, Dict
 
 import httpx
+from app.httpx_client import httpx_client as _httpx_client
 
 from app.backends import get_registry
 from app.config import S
@@ -79,7 +80,7 @@ async def generate_music(*, backend_class: str, body: Dict[str, Any]) -> Dict[st
         body["tags"] = str(tags)
 
     started = time.time()
-    async with httpx.AsyncClient(timeout=timeout) as client:
+    async with _httpx_client(timeout=timeout) as client:
         r = await client.post(f"{base}{path}", json=body)
 
     # Raise on non-2xx, but keep detail readable.

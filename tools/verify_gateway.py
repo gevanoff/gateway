@@ -195,6 +195,13 @@ def _start_uvicorn(*, cwd: str, port: int, env: dict[str, str]) -> subprocess.Po
         "warning",
     ]
 
+    # If TLS cert/key paths are provided in env, forward them to uvicorn so it
+    # can serve HTTPS directly (useful for simple local TLS testing).
+    cert = env.get("GATEWAY_TLS_CERT_PATH") or os.getenv("GATEWAY_TLS_CERT_PATH")
+    key = env.get("GATEWAY_TLS_KEY_PATH") or os.getenv("GATEWAY_TLS_KEY_PATH")
+    if cert and key:
+        argv.extend(["--ssl-certfile", cert, "--ssl-keyfile", key])
+
     # Avoid opening a new console window on Windows; harmless elsewhere.
     creationflags = 0
     if os.name == "nt" and hasattr(subprocess, "CREATE_NO_WINDOW"):

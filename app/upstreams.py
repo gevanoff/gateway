@@ -6,15 +6,15 @@ from typing import Any, AsyncIterator, Dict, List, Literal
 
 import httpx
 from fastapi import HTTPException
-
 from app.config import S, logger
+from app.httpx_client import httpx_client as _httpx_client
 from app.models import ChatCompletionRequest
 from app.openai_utils import new_id, now_unix, sse, sse_done
 from app.streaming import ollama_ndjson_to_openai_sse, passthrough_sse
 
 
 async def call_mlx_openai(req: ChatCompletionRequest) -> Dict[str, Any]:
-    async with httpx.AsyncClient(timeout=600) as client:
+    async with _httpx_client(timeout=600) as client:
         try:
             r = await client.post(
                 f"{S.MLX_BASE_URL}/chat/completions",
@@ -40,7 +40,7 @@ async def call_ollama(req: ChatCompletionRequest, model_name: str) -> Dict[str, 
     if req.temperature is not None:
         payload.setdefault("options", {})["temperature"] = req.temperature
 
-    async with httpx.AsyncClient(timeout=600) as client:
+    async with _httpx_client(timeout=600) as client:
         try:
             r = await client.post(f"{S.OLLAMA_BASE_URL}/api/chat", json=payload)
             r.raise_for_status()
@@ -65,7 +65,7 @@ async def call_ollama(req: ChatCompletionRequest, model_name: str) -> Dict[str, 
 
 
 async def embed_ollama(texts: List[str], model: str) -> List[List[float]]:
-    async with httpx.AsyncClient(timeout=600) as client:
+    async with _httpx_client(timeout=600) as client:
         try:
             r = await client.post(
                 f"{S.OLLAMA_BASE_URL}/api/embed",
@@ -95,7 +95,7 @@ async def embed_ollama(texts: List[str], model: str) -> List[List[float]]:
 
 
 async def embed_mlx(texts: List[str], model: str) -> List[List[float]]:
-    async with httpx.AsyncClient(timeout=600) as client:
+    async with _httpx_client(timeout=600) as client:
         r = await client.post(
             f"{S.MLX_BASE_URL}/embeddings",
             json={"model": model, "input": texts if len(texts) > 1 else texts[0]},
@@ -121,7 +121,7 @@ async def embed_text_for_memory(text: str) -> list[float]:
 
 
 async def stream_mlx_openai_chat(payload: Dict[str, Any]) -> AsyncIterator[bytes]:
-    async with httpx.AsyncClient(timeout=None) as client:
+    async with _httpx_client(timeout=None) as client:
         try:
             async with client.stream(
                 "POST",
@@ -172,7 +172,7 @@ async def stream_ollama_chat_as_openai(req: ChatCompletionRequest, model_name: s
         if req.temperature is not None:
             payload.setdefault("options", {})["temperature"] = req.temperature
 
-        async with httpx.AsyncClient(timeout=None) as client:
+        async with _httpx_client(timeout=None) as client:
             async with client.stream("POST", f"{S.OLLAMA_BASE_URL}/api/chat", json=payload) as r:
                 r.raise_for_status()
                 # For OpenAI-compatible responses, keep the backend prefix so clients can
@@ -220,3 +220,6 @@ async def stream_ollama_chat_as_openai(req: ChatCompletionRequest, model_name: s
             finish_sent = True
 
         yield sse_done()
+
+
+# httpx client factory is provided by app.httpx_client.httpx_client

@@ -14,6 +14,7 @@ from typing import Dict, Optional
 import httpx
 
 from app.config import logger
+from app.httpx_client import httpx_client as _httpx_client
 from app.backends import BackendConfig, RouteKind, _backend_host, _capability_availability, get_registry
 
 
@@ -100,14 +101,14 @@ class HealthChecker:
             return
 
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with _httpx_client(timeout=self.timeout) as client:
                 # Check liveness
                 try:
                     health_resp = await client.get(f"{base_url}{config.health_liveness}")
                     is_healthy = health_resp.status_code == 200
                 except Exception as e:
                     error = f"liveness check failed: {e}"
-                
+
                 # Check readiness (only if healthy)
                 if is_healthy:
                     try:

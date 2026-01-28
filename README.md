@@ -8,6 +8,18 @@ FastAPI “Local AI Gateway” exposing OpenAI-ish endpoints and an internal too
 - The example env file in `app/.env.example` binds to loopback by default. If you bind to `0.0.0.0` for LAN access, use IP allowlisting/firewall rules.
 - Operational deployment and configuration guidance lives in `ai-infra/services/gateway/README.md`.
 
+### TLS / HTTPS
+
+- The gateway can be configured to serve HTTPS directly by setting `GATEWAY_TLS_CERT_PATH`
+	and `GATEWAY_TLS_KEY_PATH` to point at a PEM cert and key. This is primarily useful
+	for simple local testing; production deployments should prefer a reverse proxy
+	(nginx, Caddy) which provides richer TLS management.
+- Outbound connections to model backends honor TLS settings:
+	- `BACKEND_VERIFY_TLS` (default true) controls verification.
+	- `BACKEND_CA_BUNDLE` can point at a custom CA bundle file for upstreams.
+	- `BACKEND_CLIENT_CERT` can be a single PEM path or two paths separated by a comma
+		(`cert.pem,key.pem`) to enable client cert auth to upstreams.
+
 ## Images (text-to-image)
 
 The gateway exposes an OpenAI-ish images endpoint:
