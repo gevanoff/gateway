@@ -66,5 +66,26 @@
         "cwd": "c:\\Users\\paper\\Code\\gateway"
       }
     }
+    ,
+    {
+      "name": "lighton_ocr",
+      "version": "1",
+      "description": "Run OCR via the LightOnOCR shim (POST /v1/ocr).",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "image_url": { "type": "string", "description": "Public image URL to scan." },
+          "image_base64": { "type": "string", "description": "Base64 image data (optional)." }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "exec": {
+        "type": "subprocess",
+        "argv": ["/usr/bin/python3", "/var/lib/gateway/tools/lighton_ocr_tool.py"],
+        "timeout_sec": 120,
+        "cwd": "/var/lib/gateway/tools"
+      }
+    }
   ]
 }
