@@ -15,7 +15,7 @@ All required components have been implemented to enforce routing, concurrency, a
 
 2. **`app/backends_config.yaml`** (53 lines)
    - Single source of truth for backend definitions
-   - Defines: local_mlx, gpu_fast, gpu_heavy
+   - Defines: local_mlx, ollama, gpu_fast, gpu_heavy
    - Specifies capabilities, limits, health endpoints, payload policies
 
 3. **`app/health_checker.py`** (186 lines)
@@ -113,7 +113,7 @@ All required components have been implemented to enforce routing, concurrency, a
 
 ### 5. Deterministic Routing ✅
 - Single source of truth in `backends_config.yaml`
-- Legacy name mapping (ollama→gpu_fast, mlx→local_mlx)
+- Legacy name mapping (mlx→local_mlx)
 - No automatic fallback
 - Clear error messages for misconfigurations
 
@@ -189,15 +189,14 @@ backends:
       images_format: url
 
 legacy_mapping:
-  ollama: gpu_fast
-  mlx: local_mlx
+   mlx: local_mlx
 ```
 
 Set environment:
 ```bash
-IMAGES_BACKEND_CLASS=gpu_heavy
+IMAGES_BACKEND_CLASS=gpu_fast
 IMAGES_BACKEND=http_openai_images
-IMAGES_HTTP_BASE_URL=http://ada2:7860
+IMAGES_HTTP_BASE_URL=http://ai1:9050
 ```
 
 ## Success Criteria - All Met ✅

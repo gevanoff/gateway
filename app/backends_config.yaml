@@ -23,19 +23,19 @@ backends:
 
   gpu_fast:
     class: gpu_fast
-    base_url: http://ai1:11434
-    description: ai1 - RTX 5060 Ti, 16GB VRAM
+    base_url: http://ai1:9050
+    description: ai1 - SDXL Turbo (RTX 5060 Ti, 16GB VRAM)
     supported_capabilities:
-      - chat
-      - embeddings
+      - images
     concurrency_limits:
-      chat: 4
-      embeddings: 4
+      images: 2
     health:
-      liveness: /healthz
+      liveness: /health
       readiness: /readyz
     payload_policy:
-      images_format: null
+      images_format: url
+      images_allow_base64: true
+      images_max_bytes: 50000000
 
   ollama:
     class: ollama

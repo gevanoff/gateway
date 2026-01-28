@@ -33,15 +33,25 @@ def test_registry():
             health_readiness="/readyz",
             payload_policy={},
         ),
-        "gpu_fast": BackendConfig(
-            backend_class="gpu_fast",
-            base_url="http://ai1:11434",
-            description="Test Fast GPU",
+        "ollama": BackendConfig(
+            backend_class="ollama",
+            base_url="http://127.0.0.1:11434",
+            description="Test Ollama",
             supported_capabilities=["chat", "embeddings"],
             concurrency_limits={"chat": 4, "embeddings": 4},
             health_liveness="/healthz",
             health_readiness="/readyz",
             payload_policy={},
+        ),
+        "gpu_fast": BackendConfig(
+            backend_class="gpu_fast",
+            base_url="http://ai1:9050",
+            description="Test SDXL Turbo",
+            supported_capabilities=["images"],
+            concurrency_limits={"images": 2},
+            health_liveness="/health",
+            health_readiness="/readyz",
+            payload_policy={"images_format": "url", "images_allow_base64": True},
         ),
         "gpu_heavy": BackendConfig(
             backend_class="gpu_heavy",
@@ -56,7 +66,6 @@ def test_registry():
     }
     
     legacy_mapping = {
-        "ollama": "gpu_fast",
         "mlx": "local_mlx",
     }
     
@@ -85,10 +94,10 @@ class TestCapabilityGating:
     
     @pytest.mark.asyncio
     async def test_images_on_chat_backend_fails(self, test_registry):
-        """Image requests to gpu_fast should fail (only supports chat)."""
+        """Image requests to local_mlx should fail (only supports chat/embeddings)."""
         with patch("app.backends.get_registry", return_value=test_registry):
             with pytest.raises(HTTPException) as exc_info:
-                await check_capability("gpu_fast", "images")
+                await check_capability("local_mlx", "images")
             
             assert exc_info.value.status_code == 400
             assert "capability_not_supported" in str(exc_info.value.detail)
@@ -99,7 +108,7 @@ class TestCapabilityGating:
         with patch("app.backends.get_registry", return_value=test_registry):
             # Should not raise
             await check_capability("gpu_heavy", "images")
-            await check_capability("gpu_fast", "chat")
+            await check_capability("gpu_fast", "images")
             await check_capability("local_mlx", "embeddings")
 
 
@@ -156,17 +165,17 @@ class TestAdmissionControl:
     @pytest.mark.asyncio
     async def test_different_routes_independent(self, admission_controller):
         """Different route kinds should have independent limits."""
-        # Fill gpu_fast.chat (limit 4)
-        for _ in range(4):
-            await admission_controller.acquire("gpu_fast", "chat")
+        # Fill local_mlx.chat (limit 2)
+        for _ in range(2):
+            await admission_controller.acquire("local_mlx", "chat")
         
-        # gpu_fast.embeddings should still work (separate limit)
-        await admission_controller.acquire("gpu_fast", "embeddings")
+        # local_mlx.embeddings should still work (separate limit)
+        await admission_controller.acquire("local_mlx", "embeddings")
         
         # Clean up
-        for _ in range(4):
-            admission_controller.release("gpu_fast", "chat")
-        admission_controller.release("gpu_fast", "embeddings")
+        for _ in range(2):
+            admission_controller.release("local_mlx", "chat")
+        admission_controller.release("local_mlx", "embeddings")
     
     @pytest.mark.asyncio
     async def test_different_backends_independent(self, admission_controller):
@@ -175,13 +184,13 @@ class TestAdmissionControl:
         await admission_controller.acquire("local_mlx", "chat")
         await admission_controller.acquire("local_mlx", "chat")
         
-        # gpu_fast.chat should still work (different backend)
-        await admission_controller.acquire("gpu_fast", "chat")
+        # gpu_fast.images should still work (different backend)
+        await admission_controller.acquire("gpu_fast", "images")
         
         # Clean up
         admission_controller.release("local_mlx", "chat")
         admission_controller.release("local_mlx", "chat")
-        admission_controller.release("gpu_fast", "chat")
+        admission_controller.release("gpu_fast", "images")
     
     def test_stats_tracking(self, admission_controller):
         """Admission controller should track statistics correctly."""
@@ -189,7 +198,7 @@ class TestAdmissionControl:
         
         # Should have entries for all backend/route combinations
         assert "gpu_heavy.images" in stats
-        assert "gpu_fast.chat" in stats
+        assert "gpu_fast.images" in stats
         assert "local_mlx.embeddings" in stats
         
         # Check structure
@@ -262,7 +271,7 @@ class TestDeterministicRouting:
     
     def test_legacy_mapping_resolved(self, test_registry):
         """Legacy backend names should resolve to correct classes."""
-        assert test_registry.resolve_backend_class("ollama") == "gpu_fast"
+        assert test_registry.resolve_backend_class("ollama") == "ollama"
         assert test_registry.resolve_backend_class("mlx") == "local_mlx"
         assert test_registry.resolve_backend_class("gpu_heavy") == "gpu_heavy"
     
@@ -276,7 +285,7 @@ class TestDeterministicRouting:
         # Legacy lookup
         config = test_registry.get_backend("ollama")
         assert config is not None
-        assert config.backend_class == "gpu_fast"
+        assert config.backend_class == "ollama"
 
 
 class TestHealthChecks:

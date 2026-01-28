@@ -11,25 +11,27 @@ The gateway enforces hard limits on:
 
 ## Backend Classes
 
-Three backend classes are defined:
+Backend classes are defined as follows:
 
 | Backend Class | Hardware | Capabilities | Concurrency Limits |
 |--------------|----------|--------------|-------------------|
 | `local_mlx` | macOS Nexa (MLX) | chat, embeddings | chat: 2, embeddings: 2 |
-| `gpu_fast` | ai1 (RTX 5060 Ti, 16GB) | chat, embeddings | chat: 4, embeddings: 4 |
+| `ollama` | localhost Ollama | chat, embeddings | chat: 4, embeddings: 4 |
+| `gpu_fast` | ai1 (RTX 5060 Ti, 16GB) | **images only (SDXL Turbo)** | images: 2 |
 | `gpu_heavy` | ada2 (RTX 6000 Ada, 46GB) | **images only** | images: 2 |
 
-Legacy backend names (`ollama`, `mlx`) are mapped to their backend classes for compatibility.
+Legacy backend names (`mlx`) are mapped to their backend classes for compatibility.
 
-### Image Generation Backend (ada2)
+### Image Generation Backends
 
-**Important:** Image generation uses **only** `gpu_heavy` (ada2) with InvokeAI/ComfyUI. The previous Nexa/MLX image generation on macOS is **no longer used**.
+**Important:** Image generation can use `gpu_fast` (ai1 SDXL Turbo) for quick drafts or `gpu_heavy` (ada2) for higher quality models. Choose the active backend via `IMAGES_BACKEND_CLASS`.
 
-- **Hardware**: RTX 6000 Ada (46GB VRAM)
-- **Software**: InvokeAI (recommended) or ComfyUI
-- **Models**: SDXL (1024x1024) or SD 1.5 (512x512)
-- **Endpoint**: `http://ada2:7860`
-- **Health endpoints**: `/healthz` (liveness), `/readyz` (readiness)
+- **gpu_fast (ai1)**: SDXL Turbo
+  - Endpoint: `http://ai1:9050`
+  - Health endpoints: `/health` (liveness), `/readyz` (readiness)
+- **gpu_heavy (ada2)**: InvokeAI/ComfyUI SDXL/SD 1.5
+  - Endpoint: `http://ada2:7860`
+  - Health endpoints: `/healthz` (liveness), `/readyz` (readiness)
 
 For setup instructions, see [IMAGE_BACKEND_SETUP.md](IMAGE_BACKEND_SETUP.md).
 
@@ -64,18 +66,29 @@ backends:
     payload_policy:
       images_format: url
       images_allow_base64: true
+
+  gpu_fast:
+    class: gpu_fast
+    base_url: http://ai1:9050
+    supported_capabilities:
+      - images
+    concurrency_limits:
+      images: 2
+    payload_policy:
+      images_format: url
+      images_allow_base64: true
 ```
 
 ### Environment Variables
 
 ```bash
 # Images backend class (for admission control)
-IMAGES_BACKEND_CLASS=gpu_heavy
+IMAGES_BACKEND_CLASS=gpu_fast
 
 # Images backend implementation (InvokeAI or ComfyUI on ada2)
 IMAGES_BACKEND=http_openai_images
-IMAGES_HTTP_BASE_URL=http://ada2:7860
-IMAGES_OPENAI_MODEL=sd-xl-base-1.0  # or sd-v1-5
+IMAGES_HTTP_BASE_URL=http://ai1:9050
+# IMAGES_OPENAI_MODEL=sdxl-turbo
 
 # Image storage directory (content-addressed)
 UI_IMAGE_DIR=/var/lib/gateway/data/ui_images
@@ -208,9 +221,9 @@ Returns:
       "available": 1,
       "inflight": 1
     },
-    "gpu_fast.chat": {
-      "limit": 4,
-      "available": 4,
+    "gpu_fast.images": {
+      "limit": 2,
+      "available": 2,
       "inflight": 0
     }
   },
