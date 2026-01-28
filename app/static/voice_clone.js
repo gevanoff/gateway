@@ -9,6 +9,11 @@
   const voiceNameEl = $("voiceName");
   const saveVoiceEl = $("saveVoice");
   const deleteVoiceEl = $("deleteVoice");
+  const recordAudioEl = $("recordAudio");
+  const stopRecordingEl = $("stopRecording");
+  const clearRecordingEl = $("clearRecording");
+  const recordStatusEl = $("recordStatus");
+  const recordPlayerEl = $("recordPlayer");
   const presetEl = $("preset");
   const languageEl = $("language");
   const refTextEl = $("refText");
@@ -30,6 +35,10 @@
 
   let activeObjectUrl = null;
   let backendCache = [];
+  let recordObjectUrl = null;
+  let recordedBlob = null;
+  let recorder = null;
+  let recordingStream = null;
 
   function normalizeBackendKey(backendClass) {
     const val = String(backendClass || "").toLowerCase();
@@ -68,6 +77,88 @@
     if (playerEl) playerEl.innerHTML = "";
   }
 
+  function setRecordStatus(text) {
+    if (recordStatusEl) recordStatusEl.textContent = text || "";
+  }
+
+  function clearRecording() {
+    if (recordObjectUrl) {
+      try { URL.revokeObjectURL(recordObjectUrl); } catch (e) {}
+    }
+    recordObjectUrl = null;
+    recordedBlob = null;
+    if (recordPlayerEl) recordPlayerEl.innerHTML = "";
+    setRecordStatus("No recording yet.");
+    if (clearRecordingEl) clearRecordingEl.disabled = true;
+  }
+
+  function renderRecording(blob) {
+    if (!recordPlayerEl) return;
+    if (recordObjectUrl) {
+      try { URL.revokeObjectURL(recordObjectUrl); } catch (e) {}
+    }
+    recordPlayerEl.innerHTML = "";
+    recordObjectUrl = URL.createObjectURL(blob);
+    const audio = document.createElement("audio");
+    audio.src = recordObjectUrl;
+    audio.controls = true;
+    recordPlayerEl.appendChild(audio);
+    if (clearRecordingEl) clearRecordingEl.disabled = false;
+  }
+
+  async function startRecording() {
+    if (!navigator?.mediaDevices?.getUserMedia) {
+      setRecordStatus("Recording is not supported in this browser.");
+      return;
+    }
+    try {
+      recordingStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      recorder = new MediaRecorder(recordingStream);
+      const chunks = [];
+      recorder.addEventListener("dataavailable", (event) => {
+        if (event.data && event.data.size > 0) chunks.push(event.data);
+      });
+      recorder.addEventListener("stop", () => {
+        const blob = new Blob(chunks, { type: recorder?.mimeType || "audio/webm" });
+        recordedBlob = blob;
+        renderRecording(blob);
+        setRecordStatus("Recording ready. It will be used if no file is uploaded.");
+        if (recordAudioEl) recordAudioEl.disabled = false;
+        if (stopRecordingEl) stopRecordingEl.disabled = true;
+        if (recordingStream) {
+          recordingStream.getTracks().forEach((track) => track.stop());
+          recordingStream = null;
+        }
+      });
+      recorder.start();
+      setRecordStatus("Recording... click Stop when done.");
+      if (recordAudioEl) recordAudioEl.disabled = true;
+      if (stopRecordingEl) stopRecordingEl.disabled = false;
+    } catch (e) {
+      setRecordStatus(`Unable to start recording: ${String(e?.message || e)}`);
+      if (recordAudioEl) recordAudioEl.disabled = false;
+      if (stopRecordingEl) stopRecordingEl.disabled = true;
+    }
+  }
+
+  function stopRecording() {
+    if (recorder && recorder.state !== "inactive") {
+      recorder.stop();
+    }
+  }
+
+  function getPromptAudio() {
+    const file = promptAudioEl?.files && promptAudioEl.files[0];
+    if (file) {
+      return { file, name: file.name };
+    }
+    if (recordedBlob) {
+      const ext = recordedBlob.type.includes("wav") ? "wav" : "webm";
+      return { file: recordedBlob, name: `recording.${ext}` };
+    }
+    return null;
+  }
+
   function renderAudio(url) {
     if (!url || !playerEl) return;
     const wrapper = document.createElement("div");
@@ -87,9 +178,13 @@
       if (!resp.ok) return;
       const payload = await resp.json();
       const list = Array.isArray(payload?.available_backends) ? payload.available_backends : [];
-      backendCache = list;
+      const filtered = list.filter((item) => {
+        const key = normalizeBackendKey(item?.backend_class);
+        return key === "qwen" || key === "lux";
+      });
+      backendCache = filtered;
       backendEl.innerHTML = '<option value="">(default)</option>';
-      for (const item of list) {
+      for (const item of filtered) {
         const val = item?.backend_class;
         if (!val) continue;
         const opt = document.createElement('option');
@@ -138,16 +233,16 @@
     const text = String(textEl.value || "").trim();
     if (!text) throw new Error("text is required");
 
-    const file = promptAudioEl?.files && promptAudioEl.files[0];
+    const promptAudio = getPromptAudio();
 
     const fd = new FormData();
     fd.append("text", text);
-    if (file) fd.append("prompt_audio", file, file.name);
+    if (promptAudio) fd.append("prompt_audio", promptAudio.file, promptAudio.name);
 
     const voiceId = String(savedVoiceEl?.value || "").trim();
     const refAudio = String(refAudioEl?.value || "").trim();
     const voiceClonePrompt = String(voiceClonePromptEl?.value || "").trim();
-    if (!file && !voiceId && !refAudio && !voiceClonePrompt) {
+    if (!promptAudio && !voiceId && !refAudio && !voiceClonePrompt) {
       throw new Error("prompt audio file, saved voice, ref_audio, or voice clone prompt is required");
     }
     if (voiceId) fd.append("voice_id", voiceId);
@@ -258,12 +353,12 @@
     setStatus("", false);
     setMeta("");
     const name = String(voiceNameEl?.value || "").trim();
-    const file = promptAudioEl?.files && promptAudioEl.files[0];
+    const promptAudio = getPromptAudio();
     if (!name) { setStatus("voice name is required", true); return; }
-    if (!file) { setStatus("prompt audio file is required", true); return; }
+    if (!promptAudio) { setStatus("prompt audio file or recording is required", true); return; }
     const fd = new FormData();
     fd.append("voice_name", name);
-    fd.append("prompt_audio", file, file.name);
+    fd.append("prompt_audio", promptAudio.file, promptAudio.name);
     try {
       const resp = await fetch('/ui/api/tts/voice-library', { method: 'POST', credentials: 'same-origin', body: fd });
       const text = await resp.text();
@@ -301,6 +396,9 @@
   generateEl.addEventListener('click', handleGenerate);
   if (saveVoiceEl) saveVoiceEl.addEventListener('click', handleSaveVoice);
   if (deleteVoiceEl) deleteVoiceEl.addEventListener('click', handleDeleteVoice);
+  if (recordAudioEl) recordAudioEl.addEventListener('click', startRecording);
+  if (stopRecordingEl) stopRecordingEl.addEventListener('click', stopRecording);
+  if (clearRecordingEl) clearRecordingEl.addEventListener('click', clearRecording);
   if (backendEl) backendEl.addEventListener('change', () => {
     updateBackendHealth();
     updateBackendSections();
@@ -309,4 +407,5 @@
   loadBackends();
   loadVoiceLibrary();
   updateBackendSections();
+  clearRecording();
 })();
