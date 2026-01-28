@@ -1648,63 +1648,63 @@ async def ui_chat_stream(req: Request):
                 except Exception as e:
                     pre_events.append({"type": "delta", "delta": f"[Speech] synthesis failed: {type(e).__name__}: {e}"})
 
-                # /scan — OCR an image URL via the LightOnOCR shim
-                elif low == "/scan" or low.startswith("/scan "):
-                    image_url = cmd.replace("/scan", "", 1).strip()
-                    if not image_url:
-                        pre_events.append({"type": "delta", "delta": "[Scan] usage: /scan <image_url>"})
-                    else:
-                        try:
-                            pre_events.append({"type": "thinking", "thinking": "Scanning image…"})
-                            import httpx
-                            import json as _json
+            # /scan — OCR an image URL via the LightOnOCR shim
+            elif low == "/scan" or low.startswith("/scan "):
+                image_url = cmd.replace("/scan", "", 1).strip()
+                if not image_url:
+                    pre_events.append({"type": "delta", "delta": "[Scan] usage: /scan <image_url>"})
+                else:
+                    try:
+                        pre_events.append({"type": "thinking", "thinking": "Scanning image…"})
+                        import httpx
+                        import json as _json
 
-                            base = os.environ.get("LIGHTON_OCR_API_BASE_URL", "http://127.0.0.1:9155").rstrip("/")
-                            timeout_sec = float(getattr(S, "LIGHTON_OCR_TIMEOUT_SEC", 120) or 120)
-                            timeout = httpx.Timeout(connect=10.0, read=timeout_sec, write=10.0, pool=10.0)
-                            async with httpx.AsyncClient(timeout=timeout) as client:
-                                resp = await client.post(f"{base}/v1/ocr", json={"image_url": image_url})
-                                if resp.status_code >= 400:
-                                    pre_events.append({"type": "delta", "delta": f"[Scan] failed: HTTP {resp.status_code}: {resp.text}"})
-                                else:
-                                    try:
-                                        data = resp.json()
-                                    except Exception:
-                                        data = {"raw": resp.text}
+                        base = os.environ.get("LIGHTON_OCR_API_BASE_URL", "http://127.0.0.1:9155").rstrip("/")
+                        timeout_sec = float(getattr(S, "LIGHTON_OCR_TIMEOUT_SEC", 120) or 120)
+                        timeout = httpx.Timeout(connect=10.0, read=timeout_sec, write=10.0, pool=10.0)
+                        async with httpx.AsyncClient(timeout=timeout) as client:
+                            resp = await client.post(f"{base}/v1/ocr", json={"image_url": image_url})
+                            if resp.status_code >= 400:
+                                pre_events.append({"type": "delta", "delta": f"[Scan] failed: HTTP {resp.status_code}: {resp.text}"})
+                            else:
+                                try:
+                                    data = resp.json()
+                                except Exception:
+                                    data = {"raw": resp.text}
 
-                                    # Best-effort text extraction from common shapes
-                                    text = None
-                                    if isinstance(data, dict):
-                                        if isinstance(data.get("text"), str) and data.get("text").strip():
-                                            text = data.get("text").strip()
-                                        elif isinstance(data.get("data"), list):
-                                            parts = []
-                                            for item in data.get("data"):
-                                                if isinstance(item, dict):
-                                                    t = item.get("text") or item.get("raw_text") or item.get("transcript")
-                                                    if isinstance(t, str) and t.strip():
-                                                        parts.append(t.strip())
-                                                    elif isinstance(item.get("lines"), list):
-                                                        for ln in item.get("lines"):
-                                                            if isinstance(ln, dict) and isinstance(ln.get("text"), str):
-                                                                parts.append(ln.get("text"))
-                                            if parts:
-                                                text = "\n".join(parts)
+                                # Best-effort text extraction from common shapes
+                                text = None
+                                if isinstance(data, dict):
+                                    if isinstance(data.get("text"), str) and data.get("text").strip():
+                                        text = data.get("text").strip()
+                                    elif isinstance(data.get("data"), list):
+                                        parts = []
+                                        for item in data.get("data"):
+                                            if isinstance(item, dict):
+                                                t = item.get("text") or item.get("raw_text") or item.get("transcript")
+                                                if isinstance(t, str) and t.strip():
+                                                    parts.append(t.strip())
+                                                elif isinstance(item.get("lines"), list):
+                                                    for ln in item.get("lines"):
+                                                        if isinstance(ln, dict) and isinstance(ln.get("text"), str):
+                                                            parts.append(ln.get("text"))
+                                        if parts:
+                                            text = "\n".join(parts)
 
-                                    if not text:
-                                        text = _json.dumps(data, ensure_ascii=False)[:2000]
+                                if not text:
+                                    text = _json.dumps(data, ensure_ascii=False)[:2000]
 
-                                    pre_events.append({"type": "delta", "delta": f"[Scan] {text}"})
-                                    try:
-                                        if conversation_id:
-                                            if user is None:
-                                                ui_conversations.append_message(conversation_id, {"role": "assistant", "type": "scan", "text": text, "image_url": image_url})
-                                            else:
-                                                user_store.append_message(S.USER_DB_PATH, user_id=user.id, conversation_id=conversation_id, msg={"role": "assistant", "type": "scan", "text": text, "image_url": image_url})
-                                    except Exception:
-                                        pass
-                        except Exception as e:
-                            pre_events.append({"type": "delta", "delta": f"[Scan] failed: {type(e).__name__}: {e}"})
+                                pre_events.append({"type": "delta", "delta": f"[Scan] {text}"})
+                                try:
+                                    if conversation_id:
+                                        if user is None:
+                                            ui_conversations.append_message(conversation_id, {"role": "assistant", "type": "scan", "text": text, "image_url": image_url})
+                                        else:
+                                            user_store.append_message(S.USER_DB_PATH, user_id=user.id, conversation_id=conversation_id, msg={"role": "assistant", "type": "scan", "text": text, "image_url": image_url})
+                                except Exception:
+                                    pass
+                    except Exception as e:
+                        pre_events.append({"type": "delta", "delta": f"[Scan] failed: {type(e).__name__}: {e}"})
     except Exception:
         # best-effort only; do not fail the chat stream on command-handling errors
         pass
