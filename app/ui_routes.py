@@ -722,7 +722,8 @@ async def ui_api_personaplex_chat(req: Request) -> Dict[str, Any]:
 
     base = (getattr(S, "PERSONAPLEX_BASE_URL", "") or "").strip().rstrip("/")
     if not base:
-        raise HTTPException(status_code=404, detail="PersonaPlex base URL not configured")
+        ui_url = (getattr(S, "PERSONAPLEX_UI_URL", "") or "").strip() or "https://localhost:8998"
+        raise HTTPException(status_code=501, detail={"error": "personaplex_rest_unavailable", "ui_url": ui_url})
 
     timeout = getattr(S, "PERSONAPLEX_TIMEOUT_SEC", 120.0) or 120.0
     try:
@@ -739,6 +740,15 @@ async def ui_api_personaplex_chat(req: Request) -> Dict[str, Any]:
         if resp.status_code >= 400:
             raise HTTPException(status_code=resp.status_code, detail=data)
         return data
+
+
+@router.get("/ui/api/personaplex/info", include_in_schema=False)
+async def ui_api_personaplex_info(req: Request) -> Dict[str, Any]:
+    _require_ui_access(req)
+    _require_user(req)
+    ui_url = (getattr(S, "PERSONAPLEX_UI_URL", "") or "").strip() or "https://localhost:8998"
+    base = (getattr(S, "PERSONAPLEX_BASE_URL", "") or "").strip().rstrip("/")
+    return {"ui_url": ui_url, "rest_enabled": bool(base)}
 
 
 @router.get("/ui/api/tts/backends", include_in_schema=False)

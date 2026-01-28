@@ -45,7 +45,7 @@
       <header>
         <div>
           <h1>PersonaPlex UI</h1>
-          <div class="hint">Custom UI for PersonaPlex chat completions.</div>
+          <div class="hint">PersonaPlex runs a local HTTPS + WebSocket UI. This page launches the live UI.</div>
         </div>
         <div class="row">
           <a class="pill" href="/ui">Back to Chat</a>
@@ -54,37 +54,16 @@
 
       <section class="card">
         <div class="row" style="justify-content:space-between">
-          <label style="min-width: 320px; flex: 1 1 640px;">
-            <span>Persona / System Prompt</span>
-            <textarea id="persona" placeholder="Describe the persona or system behavior"></textarea>
-          </label>
-        </div>
-
-        <div class="row" style="justify-content:space-between; margin-top: 12px">
-          <label style="min-width: 320px; flex: 1 1 640px;">
-            <span>User Message</span>
-            <textarea id="message" placeholder="Ask PersonaPlex something"></textarea>
-          </label>
-        </div>
-
-        <div class="row" style="margin-top:12px">
-          <label>
-            <span>Temperature</span>
-            <input id="temperature" type="number" min="0" max="2" step="0.1" value="0.7" />
-          </label>
-
-          <label>
-            <span>Max Tokens</span>
-            <input id="maxTokens" type="number" min="1" max="4096" step="1" value="512" />
-          </label>
-
-          <button id="send" type="button">Send</button>
-        </div>
-
-        <div class="out">
-          <div id="status" class="hint"></div>
-          <div id="meta" class="hint" style="margin-top: 8px"></div>
-          <div id="response" class="response" style="margin-top: 12px"></div>
+          <div style="min-width: 320px; flex: 1 1 640px;">
+            <div class="hint" style="margin-bottom:8px">PersonaPlex does not expose a REST API. Use the live UI instead.</div>
+            <div class="row">
+              <button id="openUi" type="button">Open PersonaPlex UI</button>
+              <a id="uiLink" class="pill" href="#" target="_blank" rel="noreferrer">Open in new tab</a>
+            </div>
+            <div class="out">
+              <div id="status" class="hint"></div>
+            </div>
+          </div>
         </div>
       </section>
     </main>
