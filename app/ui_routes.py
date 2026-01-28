@@ -1068,6 +1068,22 @@ def _conversation_to_chat_messages(convo: ui_conversations.Conversation) -> list
             msgs.append(ChatMessage(role=role, content=content))
             last_role = role
 
+    # If the conversation is long, keep only the most recent turns so upstream
+    # models see a compact, relevant context. Preserve the system summary if
+    # present and then truncate the remaining messages to the configured
+    # `UI_CHAT_SUMMARY_KEEP_LAST_MESSAGES` value.
+    try:
+        keep_n = _summary_keep_last_messages()
+    except Exception:
+        keep_n = 12
+
+    # Preserve system summary at msgs[0] when present
+    start_idx = 1 if convo.summary else 0
+    if len(msgs) - start_idx > keep_n:
+        tail = msgs[start_idx:]
+        tail = tail[-keep_n:]
+        msgs = msgs[:start_idx] + tail
+
     return msgs
 
 
@@ -1198,6 +1214,20 @@ def _conversation_payload_to_chat_messages(convo: Dict[str, Any]) -> list[ChatMe
         else:
             msgs.append(ChatMessage(role=role, content=content))
             last_role = role
+
+    # Truncate to most recent turns to avoid sending excessive, irrelevant
+    # history to upstream models. Preserve any system summary and keep only
+    # the last N messages as configured.
+    try:
+        keep_n = _summary_keep_last_messages()
+    except Exception:
+        keep_n = 12
+
+    start_idx = 1 if summary else 0
+    if len(msgs) - start_idx > keep_n:
+        tail = msgs[start_idx:]
+        tail = tail[-keep_n:]
+        msgs = msgs[:start_idx] + tail
 
     return msgs
 
