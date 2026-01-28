@@ -1029,6 +1029,10 @@ def _conversation_to_chat_messages(convo: ui_conversations.Conversation) -> list
     if convo.summary:
         msgs.append(ChatMessage(role="system", content=f"Conversation summary:\n{convo.summary.strip()}"))
 
+    # Merge consecutive messages of the same role to present clear alternating
+    # turns to the model. This prevents the model from attempting to reply to
+    # each prior user chunk as a separate request.
+    last_role: str | None = None
     for item in convo.messages:
         if not isinstance(item, dict):
             continue
@@ -1037,9 +1041,16 @@ def _conversation_to_chat_messages(convo: ui_conversations.Conversation) -> list
         if str(item.get("type") or "") == "image":
             continue
         content = item.get("content")
-        if not isinstance(content, str):
+        if not isinstance(content, str) or not content:
             continue
-        msgs.append(ChatMessage(role=role, content=content))
+
+        if last_role is not None and last_role == role and msgs:
+            # append to previous message of same role
+            prev = msgs[-1]
+            prev.content = (prev.content or "") + "\n" + content
+        else:
+            msgs.append(ChatMessage(role=role, content=content))
+            last_role = role
 
     return msgs
 
@@ -1152,6 +1163,9 @@ def _conversation_payload_to_chat_messages(convo: Dict[str, Any]) -> list[ChatMe
     if not isinstance(raw_messages, list):
         return msgs
 
+    # Merge consecutive messages of the same role so upstreams see alternating
+    # turns rather than many discrete same-role items.
+    last_role: str | None = None
     for item in raw_messages:
         if not isinstance(item, dict):
             continue
@@ -1159,9 +1173,15 @@ def _conversation_payload_to_chat_messages(convo: Dict[str, Any]) -> list[ChatMe
         if str(item.get("type") or "") == "image":
             continue
         content = item.get("content")
-        if not isinstance(content, str):
+        if not isinstance(content, str) or not content:
             continue
-        msgs.append(ChatMessage(role=role, content=content))
+
+        if last_role is not None and last_role == role and msgs:
+            prev = msgs[-1]
+            prev.content = (prev.content or "") + "\n" + content
+        else:
+            msgs.append(ChatMessage(role=role, content=content))
+            last_role = role
 
     return msgs
 
