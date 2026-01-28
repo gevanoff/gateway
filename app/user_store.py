@@ -131,6 +131,7 @@ def _default_settings() -> Dict[str, Any]:
         "chat": {
             "history": True,
         },
+        "profile": {"system_prompt": "", "tone": ""},
     }
 
 
@@ -205,6 +206,16 @@ def set_password(db_path: str, *, username: str, password: str) -> None:
     now = _now()
     conn = _db(db_path)
     cur = conn.execute("UPDATE users SET password_hash=?, password_salt=?, updated_ts=? WHERE username=?", (phash, salt.hex(), now, uname))
+    conn.commit()
+    conn.close()
+    if cur.rowcount == 0:
+        raise ValueError("user not found")
+
+
+def set_admin(db_path: str, *, username: str, admin: bool = True) -> None:
+    uname = (username or "").strip().lower()
+    conn = _db(db_path)
+    cur = conn.execute("UPDATE users SET admin=?, updated_ts=? WHERE username=?", (1 if admin else 0, _now(), uname))
     conn.commit()
     conn.close()
     if cur.rowcount == 0:

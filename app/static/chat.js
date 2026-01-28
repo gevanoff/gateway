@@ -264,7 +264,7 @@
     }
 
     // User settings management
-    let userSettings = { ttsVoice: "", showTimestamps: false, audioVolume: 1.0, autoPlayTTS: false };
+    let userSettings = { ttsVoice: "", showTimestamps: false, audioVolume: 1.0, autoPlayTTS: false, systemPrompt: "", profileTone: "" };
 
     async function loadUserSettings() {
       try {
@@ -277,6 +277,8 @@
           showTimestamps: !!(s.ui && s.ui.showTimestamps || s.showTimestamps),
           audioVolume: typeof s.audioVolume === 'number' ? s.audioVolume : (s.audio && typeof s.audio.volume === 'number' ? s.audio.volume : (s.audioVolume || 1.0)),
           autoPlayTTS: !!(s.audio && s.audio.autoPlayTTS || s.autoPlayTTS),
+          systemPrompt: (s.profile && s.profile.system_prompt) || s.profile?.system_prompt || s.profile?.systemPrompt || "",
+          profileTone: (s.profile && s.profile.tone) || s.profile?.tone || "",
         };
         applyUserSettingsToUi();
       } catch (e) {
@@ -322,6 +324,13 @@
         if (showTs) showTs.checked = !!userSettings.showTimestamps;
         if (vol) vol.value = String(Number(userSettings.audioVolume || 1));
         if (autoplay) autoplay.checked = !!userSettings.autoPlayTTS;
+        // populate profile fields
+        try {
+          const sys = document.getElementById('settings_system_prompt');
+          const tone = document.getElementById('settings_profile_tone');
+          if (sys) sys.value = userSettings.systemPrompt || "";
+          if (tone) tone.value = userSettings.profileTone || "";
+        } catch (e) {}
 
         // Show password controls only when user auth is enabled and the user
         // is authenticated. Call /ui/api/auth/me and hide the password fieldset
@@ -361,6 +370,8 @@
       const showTs = document.getElementById('settings_show_timestamps');
       const vol = document.getElementById('settings_audio_volume');
       const autoplay = document.getElementById('settings_autoplay_tts');
+      const sys = document.getElementById('settings_system_prompt');
+      const tone = document.getElementById('settings_profile_tone');
       const curPwd = document.getElementById('settings_current_password');
       const newPwd = document.getElementById('settings_new_password');
       const confirmPwd = document.getElementById('settings_confirm_password');
@@ -369,6 +380,7 @@
         ui: { showTimestamps: !!(showTs && showTs.checked) },
         audioVolume: vol ? Number(vol.value) : 1.0,
         autoPlayTTS: !!(autoplay && autoplay.checked),
+        profile: { system_prompt: sys ? String(sys.value || '') : '', tone: tone ? String(tone.value || '') : '' },
       };
       try {
         // If user provided password fields, attempt password change first.
@@ -404,6 +416,8 @@
         userSettings.showTimestamps = !!newSettings.ui.showTimestamps;
         userSettings.audioVolume = Number(newSettings.audioVolume || 1.0);
         userSettings.autoPlayTTS = !!newSettings.autoPlayTTS;
+        userSettings.systemPrompt = newSettings.profile?.system_prompt || "";
+        userSettings.profileTone = newSettings.profile?.tone || "";
         applyUserSettingsToUi();
         closeSettings();
       } catch (e) {

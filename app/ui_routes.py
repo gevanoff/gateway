@@ -975,6 +975,15 @@ async def ui_chat(req: Request) -> Dict[str, Any]:
         stream=False,
     )
 
+    # Prepend per-user profile/system prompt when authenticated so the model
+    # personalizes responses while still answering the provided user message.
+    try:
+        pmsg = _build_profile_system_message(user)
+        if pmsg:
+            cc.messages = [pmsg] + cc.messages
+    except Exception:
+        pass
+
     route = decide_route(
         cfg=router_cfg(),
         request_model=cc.model,
@@ -1038,6 +1047,36 @@ def _coerce_messages(body: dict[str, Any]) -> list[ChatMessage]:
     if isinstance(message, str) and message.strip():
         return [ChatMessage(role="user", content=message.strip())]
     return []
+
+
+def _build_profile_system_message(user: Optional[user_store.User]) -> ChatMessage | None:
+    if user is None:
+        return None
+    try:
+        settings = user_store.get_settings(S.USER_DB_PATH, user_id=user.id) or {}
+        profile = settings.get("profile") if isinstance(settings, dict) else None
+        if not isinstance(profile, dict):
+            return None
+        prompt = str(profile.get("system_prompt") or "").strip()
+        tone = str(profile.get("tone") or "").strip()
+        if not prompt and not tone:
+            return None
+        parts: list[str] = []
+        if prompt:
+            parts.append(prompt)
+        if tone:
+            parts.append(f"Tone guidance: {tone}")
+        content = "\n\n".join(parts)
+        # Bound the profile content to avoid blowing model context.
+        try:
+            max_chars = int(getattr(S, "UI_PROFILE_MAX_CHARS", 2000) or 2000)
+        except Exception:
+            max_chars = 2000
+        if len(content) > max_chars:
+            content = content[: max_chars - 1] + "…"
+        return ChatMessage(role="system", content=content)
+    except Exception:
+        return None
 
 
 def _conversation_to_chat_messages(convo: ui_conversations.Conversation) -> list[ChatMessage]:
@@ -1453,6 +1492,14 @@ async def ui_chat_stream(req: Request):
 
     if not messages:
         raise HTTPException(status_code=400, detail="messages required")
+    # Prepend per-user profile/system prompt when authenticated so the model
+    # personalizes responses while still answering the most recent user input.
+    try:
+        pmsg = _build_profile_system_message(user)
+        if pmsg:
+            messages = [pmsg] + messages
+    except Exception:
+        pass
     
     # Collect pre-stream events produced by server-side command handling.
     pre_events: list[dict] = []
