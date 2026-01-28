@@ -28,13 +28,14 @@ def init_db(db_path: str) -> None:
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS users (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          username TEXT UNIQUE NOT NULL,
-          password_hash TEXT NOT NULL,
-          password_salt TEXT NOT NULL,
-          created_ts INTEGER NOT NULL,
-          updated_ts INTEGER NOT NULL,
-          disabled INTEGER NOT NULL DEFAULT 0
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                password_salt TEXT NOT NULL,
+                created_ts INTEGER NOT NULL,
+                updated_ts INTEGER NOT NULL,
+                disabled INTEGER NOT NULL DEFAULT 0,
+                admin INTEGER NOT NULL DEFAULT 0
         )
         """
     )
@@ -76,6 +77,20 @@ def init_db(db_path: str) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_user_conversations_user ON user_conversations(user_id, updated_ts);")
     conn.commit()
     conn.close()
+    # Ensure legacy DBs have the 'admin' column
+    try:
+        conn = _db(db_path)
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(users);").fetchall()]
+        if "admin" not in cols:
+            conn.execute("ALTER TABLE users ADD COLUMN admin INTEGER NOT NULL DEFAULT 0")
+            conn.commit()
+        conn.close()
+    except Exception:
+        # Best-effort: if PRAGMA/ALTER fails (old sqlite?), ignore and continue.
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 def _hash_password(password: str, salt: bytes) -> str:
@@ -94,6 +109,7 @@ class User:
     id: int
     username: str
     disabled: bool
+    admin: bool = False
 
 
 @dataclass
@@ -131,7 +147,7 @@ def create_user(db_path: str, *, username: str, password: str) -> User:
     conn = _db(db_path)
     try:
         cur = conn.execute(
-            "INSERT INTO users(username,password_hash,password_salt,created_ts,updated_ts,disabled) VALUES(?,?,?,?,?,0)",
+            "INSERT INTO users(username,password_hash,password_salt,created_ts,updated_ts,disabled,admin) VALUES(?,?,?,?,?,?,0,0)",
             (uname, phash, salt.hex(), now, now),
         )
         user_id = int(cur.lastrowid)
@@ -145,6 +161,36 @@ def create_user(db_path: str, *, username: str, password: str) -> User:
     finally:
         conn.close()
     return User(id=user_id, username=uname, disabled=False)
+
+
+def create_user_with_admin(db_path: str, *, username: str, password: str, admin: bool = False) -> User:
+    # Backwards-compatible wrapper that allows creating admin users.
+    uname = (username or "").strip().lower()
+    if not uname:
+        raise ValueError("username required")
+    if not password:
+        raise ValueError("password required")
+
+    salt = _new_salt()
+    phash = _hash_password(password, salt)
+    now = _now()
+    conn = _db(db_path)
+    try:
+        cur = conn.execute(
+            "INSERT INTO users(username,password_hash,password_salt,created_ts,updated_ts,disabled,admin) VALUES(?,?,?,?,?,?,?)",
+            (uname, phash, salt.hex(), now, now, 0, 1 if admin else 0),
+        )
+        user_id = int(cur.lastrowid)
+        conn.execute(
+            "INSERT OR IGNORE INTO user_settings(user_id,settings_json,updated_ts) VALUES(?,?,?)",
+            (user_id, json.dumps(_default_settings(), ensure_ascii=False), now),
+        )
+        conn.commit()
+    except sqlite3.IntegrityError as e:
+        raise ValueError("username already exists") from e
+    finally:
+        conn.close()
+    return User(id=user_id, username=uname, disabled=False, admin=bool(admin))
 
 
 def set_password(db_path: str, *, username: str, password: str) -> None:
@@ -177,9 +223,9 @@ def disable_user(db_path: str, *, username: str, disabled: bool = True) -> None:
 
 def list_users(db_path: str) -> List[User]:
     conn = _db(db_path)
-    rows = conn.execute("SELECT id, username, disabled FROM users ORDER BY username ASC").fetchall()
+    rows = conn.execute("SELECT id, username, disabled, admin FROM users ORDER BY username ASC").fetchall()
     conn.close()
-    return [User(id=int(r[0]), username=str(r[1]), disabled=bool(r[2])) for r in rows]
+    return [User(id=int(r[0]), username=str(r[1]), disabled=bool(r[2]), admin=bool(r[3])) for r in rows]
 
 
 def authenticate(db_path: str, *, username: str, password: str) -> Optional[User]:
@@ -188,13 +234,13 @@ def authenticate(db_path: str, *, username: str, password: str) -> Optional[User
         return None
     conn = _db(db_path)
     row = conn.execute(
-        "SELECT id, username, password_hash, password_salt, disabled FROM users WHERE username=?",
+        "SELECT id, username, password_hash, password_salt, disabled, admin FROM users WHERE username=?",
         (uname,),
     ).fetchone()
     conn.close()
     if not row:
         return None
-    user_id, uname, phash, psalt, disabled = row
+    user_id, uname, phash, psalt, disabled, admin = row
     if disabled:
         return None
     try:
@@ -203,7 +249,7 @@ def authenticate(db_path: str, *, username: str, password: str) -> Optional[User
         return None
     if _hash_password(password, salt) != phash:
         return None
-    return User(id=int(user_id), username=str(uname), disabled=False)
+    return User(id=int(user_id), username=str(uname), disabled=False, admin=bool(admin))
 
 
 def create_session(db_path: str, *, user_id: int, ttl_sec: int) -> Session:
@@ -231,7 +277,7 @@ def get_user_by_session(db_path: str, *, token: str) -> Optional[User]:
     _purge_expired_sessions(conn)
     row = conn.execute(
         """
-        SELECT u.id, u.username, u.disabled
+        SELECT u.id, u.username, u.disabled, u.admin
         FROM user_sessions s
         JOIN users u ON u.id = s.user_id
         WHERE s.token = ? AND s.expires_ts >= ?
@@ -242,10 +288,10 @@ def get_user_by_session(db_path: str, *, token: str) -> Optional[User]:
     conn.close()
     if not row:
         return None
-    user_id, uname, disabled = row
+    user_id, uname, disabled, admin = row
     if disabled:
         return None
-    return User(id=int(user_id), username=str(uname), disabled=False)
+    return User(id=int(user_id), username=str(uname), disabled=False, admin=bool(admin))
 
 
 def delete_session(db_path: str, *, token: str) -> None:

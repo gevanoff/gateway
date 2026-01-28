@@ -162,6 +162,15 @@ def _require_user(req: Request) -> Optional[user_store.User]:
     return user
 
 
+def _require_admin(req: Request) -> user_store.User:
+    user = _require_user(req)
+    if user is None:
+        raise HTTPException(status_code=401, detail="authentication required")
+    if not getattr(user, "admin", False):
+        raise HTTPException(status_code=403, detail="admin required")
+    return user
+
+
 def _coerce_tts_body(body: Any) -> Dict[str, Any]:
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="body must be an object")
@@ -476,6 +485,14 @@ async def ui_tts_frontend(req: Request) -> HTMLResponse:
     return HTMLResponse(html_path.read_text(encoding="utf-8"))
 
 
+@router.get("/ui/admin/users", include_in_schema=False)
+async def ui_admin_users(req: Request) -> HTMLResponse:
+    _require_ui_access(req)
+    # Only render the page; the page will call the admin APIs which enforce admin privileges.
+    html_path = Path(__file__).with_name("static").joinpath("admin_users.html")
+    return HTMLResponse(html_path.read_text(encoding="utf-8"))
+
+
 @router.post("/ui/api/music", include_in_schema=False)
 async def ui_api_music(req: Request) -> Dict[str, Any]:
     _require_ui_access(req)
@@ -660,13 +677,46 @@ async def ui_auth_logout(req: Request):
     return resp
 
 
+@router.get("/ui/api/users", include_in_schema=False)
+async def ui_api_list_users(req: Request):
+    _require_ui_access(req)
+    _require_admin(req)
+    users = user_store.list_users(S.USER_DB_PATH)
+    out = []
+    for u in users:
+        out.append({"id": u.id, "username": u.username, "disabled": u.disabled, "admin": getattr(u, "admin", False)})
+    return JSONResponse({"users": out})
+
+
+@router.post("/ui/api/users", include_in_schema=False)
+async def ui_api_create_user(req: Request):
+    _require_ui_access(req)
+    _require_admin(req)
+    body = await req.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="body must be an object")
+    username = str(body.get("username") or "").strip()
+    password = body.get("password")
+    admin_flag = bool(body.get("admin") or False)
+    if not username:
+        raise HTTPException(status_code=400, detail="username required")
+    if not isinstance(password, str) or not password:
+        raise HTTPException(status_code=400, detail="password required")
+
+    try:
+        user = user_store.create_user_with_admin(S.USER_DB_PATH, username=username, password=password, admin=admin_flag)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return JSONResponse({"ok": True, "user": {"id": user.id, "username": user.username, "admin": getattr(user, "admin", False)}})
+
+
 @router.get("/ui/api/auth/me", include_in_schema=False)
 async def ui_auth_me(req: Request) -> Dict[str, Any]:
     _require_ui_access(req)
     user = _require_user(req)
     if user is None:
         return {"authenticated": False}
-    return {"authenticated": True, "user": {"id": user.id, "username": user.username}}
+    return {"authenticated": True, "user": {"id": user.id, "username": user.username, "admin": getattr(user, 'admin', False)}}
 
 
 @router.get("/ui/api/user/settings", include_in_schema=False)

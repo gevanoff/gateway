@@ -1,0 +1,35 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Gateway Admin - Users</title>
+</head>
+<body>
+  <h1>Admin: Create User</h1>
+  <form id="createForm">
+    <label>Username: <input id="username" /></label><br/>
+    <label>Password: <input id="password" type="password"/></label><br/>
+    <label>Admin: <input id="isadmin" type="checkbox"/></label><br/>
+    <button type="submit">Create</button>
+  </form>
+  <div id="result"></div>
+  <script>
+    async function postJson(url, body){
+      const res = await fetch(url, {method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify(body), credentials:'include'});
+      return res.json();
+    }
+    document.getElementById('createForm').addEventListener('submit', async (ev)=>{
+      ev.preventDefault();
+      const u = document.getElementById('username').value;
+      const p = document.getElementById('password').value;
+      const a = document.getElementById('isadmin').checked;
+      try{
+        const j = await postJson('/ui/api/users', {username:u, password:p, admin:a});
+        document.getElementById('result').textContent = JSON.stringify(j);
+      }catch(e){
+        document.getElementById('result').textContent = String(e);
+      }
+    })
+  </script>
+</body>
+</html>

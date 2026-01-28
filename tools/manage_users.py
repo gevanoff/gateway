@@ -17,8 +17,11 @@ def _prompt_password(label: str) -> str:
 
 def cmd_create(args: argparse.Namespace) -> int:
     password = args.password or _prompt_password("New password: ")
-    user = user_store.create_user(S.USER_DB_PATH, username=args.username, password=password)
-    print(f"created user {user.username} (id={user.id})")
+    if getattr(args, "admin", False):
+        user = user_store.create_user_with_admin(S.USER_DB_PATH, username=args.username, password=password, admin=True)
+    else:
+        user = user_store.create_user(S.USER_DB_PATH, username=args.username, password=password)
+    print(f"created user {user.username} (id={user.id}) admin={getattr(user,'admin',False)}")
     return 0
 
 
@@ -55,6 +58,7 @@ def main() -> int:
 
     p_create = sub.add_parser("create", help="create a new user")
     p_create.add_argument("username")
+    p_create.add_argument("--admin", action="store_true", help="create user as admin")
     p_create.add_argument("--password")
     p_create.set_defaults(func=cmd_create)
 
