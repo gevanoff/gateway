@@ -5,13 +5,13 @@
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>Gateway Chat UI (v2)</title>
     <style>
-      :root { color-scheme: dark; }
+    :root { color-scheme: dark; }
       body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; background: #0b0d10; color: #e7edf6; }
       main { max-width: 980px; margin: 0 auto; padding: 16px; }
       header { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom: 12px; }
       h1 { margin: 0; font-size: 16px; font-weight: 650; }
       .hint { font-size: 12px; color: #a9b4c3; }
-      .topbar { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+      .topbar { display:flex; gap:10px; align-items:center; flex-wrap:wrap; position: relative; }
       select, input, textarea, button { font: inherit; }
       select, input, textarea { box-sizing: border-box; padding: 10px; border-radius: 10px; border: 1px solid rgba(231,237,246,0.12); background: #12161c; color: #e7edf6; }
       button { padding: 10px 12px; border-radius: 10px; border: 1px solid rgba(231,237,246,0.14); background: #12161c; color: #e7edf6; cursor: pointer; }
@@ -55,6 +55,15 @@
       .modal-panel { position: relative; width: 100%; max-width: 560px; margin: 6vh auto; background: #071018; border-radius: 12px; padding: 16px; border: 1px solid rgba(231,237,246,0.06); color: #e7edf6; z-index: 1210; }
       .modal-panel h3 { font-size: 16px; }
       .modal-panel label { display:block; font-size:13px; }
+      /* Apps dropdown menu */
+      .apps-menu { position: absolute; right: 0; top: 44px; min-width: 200px; background: #071018; border: 1px solid rgba(231,237,246,0.06); border-radius: 8px; padding: 6px; box-shadow: 0 6px 18px rgba(0,0,0,0.6); z-index: 1200; display: none; }
+      .apps-menu .menu-item { display: block; padding: 8px 10px; color: #e7edf6; text-decoration: none; border-radius: 6px; }
+      .apps-menu .menu-item:hover { background: rgba(231,237,246,0.03); }
+      .apps-menu .menu-sep { height: 1px; background: rgba(231,237,246,0.04); margin: 6px 0; }
+      .apps-btn { display:inline-flex; align-items:center; gap:8px; }
+      .apps-btn .caret { font-size: 12px; color: #93a4ba; margin-left: 4px; }
+      .apps-menu[aria-hidden="true"] { display: none; }
+      .apps-menu[aria-hidden="false"] { display: block; }
     </style>
   </head>
   <body>
@@ -79,10 +88,20 @@
             <button id="loadModels" type="button">Load</button>
           </span>
           <!-- Auto-detect toggles removed to simplify UI -->
-          <a class="pill" href="/ui/image">Image UI</a>
-          <a class="pill" href="/ui/music">Music UI</a>
-          <a class="pill" href="/ui/video">Video UI</a>
-          <a class="pill" href="/ui/tts">Text-to-speech</a>
+          <div style="position:relative;">
+            <button id="appsBtn" class="pill apps-btn" type="button" aria-expanded="false">
+              <span class="apps-label">Apps</span>
+              <span class="caret" aria-hidden="true">▾</span>
+            </button>
+            <div id="appsMenu" class="apps-menu" hidden aria-hidden="true">
+              <a class="menu-item" href="/ui/image">Image UI</a>
+              <a class="menu-item" href="/ui/music">Music UI</a>
+              <a class="menu-item" href="/ui/video">Video UI</a>
+              <a class="menu-item" href="/ui/tts">Text-to-speech</a>
+              <div class="menu-sep"></div>
+              <a id="adminUiLink" class="menu-item admin-only" href="/ui/admin/users" style="display:none">Admin UI</a>
+            </div>
+          </div>
           <button id="clear" type="button">Clear message box</button>
           <button id="clearChat" type="button">Clear Chat</button>
           <button id="resetSession" type="button">Reset Session</button>

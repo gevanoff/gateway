@@ -997,6 +997,40 @@
       if (settingsCancel) settingsCancel.addEventListener('click', () => closeSettings());
       if (settingsClose) settingsClose.addEventListener('click', () => closeSettings());
       if (settingsSave) settingsSave.addEventListener('click', () => saveSettingsFromModal());
+      // Apps menu: toggle and admin-only link visibility
+      const appsBtnEl = document.getElementById('appsBtn');
+      const appsMenuEl = document.getElementById('appsMenu');
+      const adminUiLinkEl = document.getElementById('adminUiLink');
+      if (appsBtnEl && appsMenuEl) {
+        appsBtnEl.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const expanded = appsBtnEl.getAttribute('aria-expanded') === 'true';
+          appsBtnEl.setAttribute('aria-expanded', expanded ? 'false' : 'true');
+          appsMenuEl.setAttribute('aria-hidden', expanded ? 'true' : 'false');
+        });
+        // close when clicking elsewhere
+        document.addEventListener('click', (ev) => {
+          try {
+            if (!appsMenuEl.contains(ev.target) && ev.target !== appsBtnEl) {
+              appsBtnEl.setAttribute('aria-expanded', 'false');
+              appsMenuEl.setAttribute('aria-hidden', 'true');
+            }
+          } catch (e) {}
+        });
+        // allow clicks inside menu without closing
+        appsMenuEl.addEventListener('click', (ev) => ev.stopPropagation());
+      }
+      // Show admin link when the current user is admin (call /ui/api/auth/me)
+      (async () => {
+        try {
+          const r = await fetch('/ui/api/auth/me', { method: 'GET', credentials: 'same-origin' });
+          if (!r.ok) return;
+          const j = await r.json();
+          if (j && j.authenticated && j.user && j.user.admin) {
+            try { if (adminUiLinkEl) adminUiLinkEl.style.display = 'block'; } catch (e) {}
+          }
+        } catch (e) {}
+      })();
       if (inputEl) {
         inputEl.addEventListener('keydown', (e) => {
           if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
