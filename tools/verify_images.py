@@ -6,10 +6,14 @@ import argparse
 import json
 import os
 import sys
+import ssl
 from typing import Any
 
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+
+
+_TLS_CONTEXT: ssl.SSLContext | None = None
 
 
 def _http_json(
@@ -31,7 +35,7 @@ def _http_json(
     req = Request(url=url, data=raw, headers=h, method=method.upper())
 
     try:
-        with urlopen(req, timeout=timeout_sec) as resp:
+        with urlopen(req, timeout=timeout_sec, context=_TLS_CONTEXT) as resp:
             status = int(getattr(resp, "status", resp.getcode()))
             headers_out = {k.lower(): v for k, v in resp.headers.items()}
             data = resp.read(max_body_bytes + 1)[:max_body_bytes]
@@ -138,7 +142,12 @@ def _env_gateway_token() -> str:
 
 def main(argv: list[str]) -> int:
     p = argparse.ArgumentParser(description="Smoke-test A1111 and gateway image generation endpoints.")
-    p.add_argument("--gateway-base-url", default="http://127.0.0.1:8800")
+    p.add_argument("--gateway-base-url", default="https://127.0.0.1:8800")
+    p.add_argument(
+        "--insecure",
+        action="store_true",
+        help="Disable TLS certificate verification (useful for self-signed local certs).",
+    )
     p.add_argument(
         "--token",
         default="",
@@ -168,6 +177,13 @@ def main(argv: list[str]) -> int:
     )
 
     args = p.parse_args(argv)
+
+    insecure = args.insecure or (os.getenv("GATEWAY_TLS_INSECURE") or "").strip().lower() in {"1", "true", "yes", "on"}
+    global _TLS_CONTEXT
+    if insecure:
+        _TLS_CONTEXT = ssl._create_unverified_context()
+    else:
+        _TLS_CONTEXT = ssl.create_default_context()
 
     token = (args.token or "").strip() or _env_gateway_token()
 

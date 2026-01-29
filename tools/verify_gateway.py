@@ -7,6 +7,7 @@ import base64
 import json
 import os
 import socket
+import ssl
 import subprocess
 import sys
 import time
@@ -15,6 +16,9 @@ from typing import Optional
 
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+
+
+_TLS_CONTEXT: ssl.SSLContext | None = None
 
 
 def _maybe_reexec_into_gateway_venv() -> None:
@@ -81,7 +85,7 @@ def _http_request(
     request = Request(url=url, data=body, headers=req_headers, method=method.upper())
 
     try:
-        with urlopen(request, timeout=timeout_sec) as resp:
+        with urlopen(request, timeout=timeout_sec, context=_TLS_CONTEXT) as resp:
             status = int(getattr(resp, "status", resp.getcode()))
             resp_headers = {k.lower(): v for k, v in resp.headers.items()}
             data = resp.read(max_body_bytes + 1)
@@ -122,7 +126,7 @@ def _http_stream_until_done(
 
     buf = bytearray()
     try:
-        with urlopen(request, timeout=timeout_sec) as resp:
+        with urlopen(request, timeout=timeout_sec, context=_TLS_CONTEXT) as resp:
             status = int(getattr(resp, "status", resp.getcode()))
             if status != 200:
                 return False, f"status={status}"
@@ -679,7 +683,12 @@ def main(argv: list[str]) -> int:
     p.add_argument(
         "--base-url",
         default="",
-        help="If set, do HTTP checks against an already-running gateway (e.g. http://127.0.0.1:8800).",
+        help="If set, do HTTPS checks against an already-running gateway (e.g. https://127.0.0.1:8800).",
+    )
+    p.add_argument(
+        "--insecure",
+        action="store_true",
+        help="Disable TLS certificate verification (useful for self-signed local certs).",
     )
     p.add_argument(
         "--token",
@@ -710,6 +719,13 @@ def main(argv: list[str]) -> int:
     ns = p.parse_args(argv)
 
     token = (ns.token or "").strip() or _env_gateway_token()
+    insecure = ns.insecure or (os.getenv("GATEWAY_TLS_INSECURE") or "").strip().lower() in {"1", "true", "yes", "on"}
+
+    global _TLS_CONTEXT
+    if insecure:
+        _TLS_CONTEXT = ssl._create_unverified_context()
+    else:
+        _TLS_CONTEXT = ssl.create_default_context()
 
     if ns.appliance:
         ns.require_backend = True

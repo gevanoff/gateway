@@ -48,7 +48,7 @@ class Settings(BaseSettings):
     UI_IP_ALLOWLIST: str = ""
 
     # Optional public base URL for constructing absolute URLs in API responses.
-    # When set (e.g. "http://ai2:8800"), image responses that would otherwise return
+    # When set (e.g. "https://ai2:8800"), image responses that would otherwise return
     # relative paths like "/ui/images/<name>" can instead return fully-qualified URLs.
     # Leave empty to preserve relative URLs.
     PUBLIC_BASE_URL: str = ""

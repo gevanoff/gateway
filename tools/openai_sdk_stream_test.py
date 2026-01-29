@@ -52,7 +52,12 @@ def _env_first(*keys: str) -> Optional[str]:
     return None
 
 
-def _raw_sse_debug(base_url: str, api_key: str, model: str, prompt: str) -> None:
+def _env_flag(name: str) -> bool:
+    raw = (os.getenv(name) or "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _raw_sse_debug(base_url: str, api_key: str, model: str, prompt: str, *, insecure: bool) -> None:
     try:
         import httpx
 
@@ -62,7 +67,7 @@ def _raw_sse_debug(base_url: str, api_key: str, model: str, prompt: str) -> None
 
         print("---- raw http debug ----", file=sys.stderr)
         print(f"POST {url}", file=sys.stderr)
-        with httpx.Client(timeout=30.0, http2=False) as hc:
+        with httpx.Client(timeout=30.0, http2=False, verify=not insecure) as hc:
             with hc.stream("POST", url, headers=headers, json=payload) as r:
                 print(f"status={r.status_code}", file=sys.stderr)
                 ct = r.headers.get("content-type", "")
@@ -121,12 +126,17 @@ def main(argv: List[str]) -> int:
     _maybe_reexec_into_gateway_venv()
 
     p = argparse.ArgumentParser(description="Validate gateway SSE streaming via the OpenAI Python SDK.")
-    p.add_argument("--base-url", default=_env_first("GATEWAY_OPENAI_BASE_URL", "OPENAI_BASE_URL") or "http://127.0.0.1:8800/v1")
+    p.add_argument("--base-url", default=_env_first("GATEWAY_OPENAI_BASE_URL", "OPENAI_BASE_URL") or "https://127.0.0.1:8800/v1")
     p.add_argument("--api-key", default=_env_first("GATEWAY_BEARER_TOKEN", "OPENAI_API_KEY") or "")
     p.add_argument("--model", default=os.getenv("GATEWAY_MODEL", "fast"))
     p.add_argument("--prompt", default="Count from 1 to 5, slowly.")
     p.add_argument("--max-chunks", type=int, default=10_000)
     p.add_argument("--debug-http", action="store_true", help="If set, also print raw HTTP/SSE details.")
+    p.add_argument(
+        "--insecure",
+        action="store_true",
+        help="Disable TLS certificate verification (useful for self-signed local certs).",
+    )
     ns = p.parse_args(argv)
 
     if not ns.api_key:
@@ -156,7 +166,18 @@ def main(argv: List[str]) -> int:
         print(f"Import error: {type(e).__name__}: {e}", file=sys.stderr)
         return 3
 
-    client = OpenAI(base_url=ns.base_url, api_key=ns.api_key)
+    insecure = ns.insecure or _env_flag("GATEWAY_TLS_INSECURE")
+    try:
+        import httpx
+
+        http_client = httpx.Client(verify=not insecure)
+    except Exception:
+        http_client = None
+
+    if http_client is not None:
+        client = OpenAI(base_url=ns.base_url, api_key=ns.api_key, http_client=http_client)
+    else:
+        client = OpenAI(base_url=ns.base_url, api_key=ns.api_key)
 
     print(f"base_url={ns.base_url}")
     print(f"model={ns.model}")
@@ -168,9 +189,20 @@ def main(argv: List[str]) -> int:
     try:
         # Be explicit about accepting SSE.
         try:
-            client = OpenAI(base_url=ns.base_url, api_key=ns.api_key, default_headers={"accept": "text/event-stream"})
+            if http_client is not None:
+                client = OpenAI(
+                    base_url=ns.base_url,
+                    api_key=ns.api_key,
+                    default_headers={"accept": "text/event-stream"},
+                    http_client=http_client,
+                )
+            else:
+                client = OpenAI(base_url=ns.base_url, api_key=ns.api_key, default_headers={"accept": "text/event-stream"})
         except Exception:
-            client = OpenAI(base_url=ns.base_url, api_key=ns.api_key)
+            if http_client is not None:
+                client = OpenAI(base_url=ns.base_url, api_key=ns.api_key, http_client=http_client)
+            else:
+                client = OpenAI(base_url=ns.base_url, api_key=ns.api_key)
 
         stream = client.chat.completions.create(
             model=ns.model,
@@ -182,6 +214,8 @@ def main(argv: List[str]) -> int:
             chunks += 1
             if chunks > ns.max_chunks:
                 print("ERROR: exceeded --max-chunks; stream may be hanging.", file=sys.stderr)
+                if http_client is not None:
+                    http_client.close()
                 return 4
 
             choice = (getattr(event, "choices", None) or [None])[0]
@@ -203,9 +237,13 @@ def main(argv: List[str]) -> int:
 
     except KeyboardInterrupt:
         print("\nInterrupted.")
+        if http_client is not None:
+            http_client.close()
         return 130
     except Exception as e:
         print(f"ERROR: SDK streaming call failed: {type(e).__name__}: {e}", file=sys.stderr)
+        if http_client is not None:
+            http_client.close()
         return 5
 
     if chunks == 0:
@@ -215,26 +253,32 @@ def main(argv: List[str]) -> int:
         # - the server only sent the terminal [DONE] marker (no JSON chunks)
         # - the server did not stream at all / returned a non-SSE response
         # Dump some raw HTTP details to make this obvious.
-        _raw_sse_debug(ns.base_url, ns.api_key, ns.model, ns.prompt)
+        _raw_sse_debug(ns.base_url, ns.api_key, ns.model, ns.prompt, insecure=insecure)
 
         print(
             "Hint: try an explicit Ollama model like --model ollama:qwen3:30b (or an alias mapped to Ollama, e.g. --model coder).",
             file=sys.stderr,
         )
+        if http_client is not None:
+            http_client.close()
         return 6
 
     if not finish_reason:
         print("ERROR: stream ended without a finish_reason.", file=sys.stderr)
         if ns.debug_http:
-            _raw_sse_debug(ns.base_url, ns.api_key, ns.model, ns.prompt)
+            _raw_sse_debug(ns.base_url, ns.api_key, ns.model, ns.prompt, insecure=insecure)
+        if http_client is not None:
+            http_client.close()
         return 7
 
     if ns.debug_http:
         # Run a second request using raw httpx streaming to show exactly what bytes
         # the gateway emitted (useful when the SDK reports OK but there is no content).
-        _raw_sse_debug(ns.base_url, ns.api_key, ns.model, ns.prompt)
+        _raw_sse_debug(ns.base_url, ns.api_key, ns.model, ns.prompt, insecure=insecure)
 
     print(f"OK: streamed {chunks} events; finish_reason={finish_reason}")
+    if http_client is not None:
+        http_client.close()
     return 0
 
 

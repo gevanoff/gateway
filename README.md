@@ -72,7 +72,7 @@ Notes:
 Smoke test (bearer-protected):
 
 ```bash
-python tools/verify_images.py --gateway-base-url http://127.0.0.1:8800 --token <token> --also-check-a1111 http://127.0.0.1:7860
+python tools/verify_images.py --gateway-base-url https://127.0.0.1:8800 --token <token> --also-check-a1111 http://127.0.0.1:7860 --insecure
 ```
 
 Or run the full verifier (includes many gateway checks), with images enabled:
@@ -107,7 +107,7 @@ Run the full contract tests + a live HTTP smoke suite:
 
 Options:
 
-- Check an already-running gateway: `python tools/verify_gateway.py --base-url http://127.0.0.1:8800 --token <token>`
+- Check an already-running gateway: `python tools/verify_gateway.py --base-url https://127.0.0.1:8800 --token <token> --insecure`
 - Require a healthy backend (otherwise backend-dependent checks are skipped): `--require-backend`
 - Appliance smoke-test mode (implies backend required): `--appliance`
 - Skip pytest (HTTP checks only): `--skip-pytest`

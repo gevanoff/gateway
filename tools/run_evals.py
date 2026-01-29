@@ -9,10 +9,14 @@ import socket
 import subprocess
 import sys
 import time
+import ssl
 from dataclasses import dataclass
 from typing import Any, Optional
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+
+
+_TLS_CONTEXT: ssl.SSLContext | None = None
 
 
 def _env_gateway_token() -> str:
@@ -93,7 +97,7 @@ def _http_request(
     request = Request(url=url, data=body, headers=req_headers, method=method.upper())
 
     try:
-        with urlopen(request, timeout=timeout_sec) as resp:
+        with urlopen(request, timeout=timeout_sec, context=_TLS_CONTEXT) as resp:
             status = int(getattr(resp, "status", resp.getcode()))
             resp_headers = {k.lower(): v for k, v in resp.headers.items()}
             data = resp.read(max_body_bytes + 1)
@@ -138,7 +142,7 @@ def _http_stream_metrics(
     total_bytes = 0
 
     try:
-        with urlopen(request, timeout=timeout_sec) as resp:
+        with urlopen(request, timeout=timeout_sec, context=_TLS_CONTEXT) as resp:
             status = int(getattr(resp, "status", resp.getcode()))
             # Read line-by-line to measure first SSE event.
             while True:
@@ -340,7 +344,12 @@ def main() -> int:
     _maybe_reexec_into_gateway_venv()
 
     ap = argparse.ArgumentParser(description="Local eval harness for the gateway (quality/safety/regressions).")
-    ap.add_argument("--base-url", default=os.getenv("GATEWAY_BASE_URL", "http://127.0.0.1:8800"), help="Gateway base URL")
+    ap.add_argument("--base-url", default=os.getenv("GATEWAY_BASE_URL", "https://127.0.0.1:8800"), help="Gateway base URL")
+    ap.add_argument(
+        "--insecure",
+        action="store_true",
+        help="Disable TLS certificate verification (useful for self-signed local certs).",
+    )
     ap.add_argument(
         "--token",
         default="",
@@ -355,6 +364,13 @@ def main() -> int:
     args = ap.parse_args()
 
     args.token = (args.token or "").strip() or _env_gateway_token()
+
+    insecure = args.insecure or (os.getenv("GATEWAY_TLS_INSECURE") or "").strip().lower() in {"1", "true", "yes", "on"}
+    global _TLS_CONTEXT
+    if insecure:
+        _TLS_CONTEXT = ssl._create_unverified_context()
+    else:
+        _TLS_CONTEXT = ssl.create_default_context()
 
     if not args.token:
         print("Missing token. Set --token or GATEWAY_BEARER_TOKEN.")

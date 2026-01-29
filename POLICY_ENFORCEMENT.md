@@ -104,7 +104,7 @@ Requests are rejected if the target backend doesn't support the capability:
 
 ```bash
 # Chat request to image-only backend
-curl -X POST http://localhost:8800/v1/chat/completions \
+curl -k -X POST https://localhost:8800/v1/chat/completions \
   -H "Authorization: Bearer $TOKEN" \
   -d '{"model": "gpu_heavy", "messages": [...]}'
 
@@ -124,7 +124,7 @@ Concurrency limits are enforced per (backend_class, route_kind):
 
 ```bash
 # When gpu_heavy.images is at capacity (2 inflight)
-curl -X POST http://localhost:8800/v1/images/generations \
+curl -k -X POST https://localhost:8800/v1/images/generations \
   -H "Authorization: Bearer $TOKEN" \
   -d '{"prompt": "..."}'
 
@@ -149,7 +149,7 @@ Images default to URL responses; base64 only when explicitly requested:
 
 ```bash
 # Default: returns URLs
-curl -X POST http://localhost:8800/v1/images/generations \
+curl -k -X POST https://localhost:8800/v1/images/generations \
   -H "Authorization: Bearer $TOKEN" \
   -d '{"prompt": "a cat", "n": 1}'
 
@@ -160,7 +160,7 @@ curl -X POST http://localhost:8800/v1/images/generations \
 }
 
 # Explicit base64 request
-curl -X POST http://localhost:8800/v1/images/generations \
+curl -k -X POST https://localhost:8800/v1/images/generations \
   -H "Authorization: Bearer $TOKEN" \
   -d '{"prompt": "a cat", "response_format": "b64_json"}'
 
@@ -189,7 +189,7 @@ The gateway:
 
 ```bash
 # When backend is not ready
-curl -X POST http://localhost:8800/v1/chat/completions \
+curl -k -X POST https://localhost:8800/v1/chat/completions \
   -H "Authorization: Bearer $TOKEN" \
   -d '{"model": "local_mlx", "messages": [...]}'
 
@@ -208,7 +208,7 @@ curl -X POST http://localhost:8800/v1/chat/completions \
 ### Gateway Status Endpoint
 
 ```bash
-curl http://localhost:8800/v1/gateway/status \
+curl -k https://localhost:8800/v1/gateway/status \
   -H "Authorization: Bearer $TOKEN"
 ```
 

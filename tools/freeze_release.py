@@ -22,11 +22,15 @@ import platform
 import shutil
 import subprocess
 import sys
+import ssl
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+
+
+_TLS_CONTEXT: ssl.SSLContext | None = None
 
 
 def _read_text(path: str) -> Optional[str]:
@@ -50,7 +54,7 @@ def _run_cmd(argv: list[str], *, timeout_sec: float = 2.0) -> Tuple[int, str]:
 def _http_json(method: str, url: str, *, headers: Optional[dict[str, str]] = None, timeout_sec: float = 5.0) -> Tuple[Optional[int], Any, Optional[str]]:
     req = Request(url=url, method=method, headers=headers or {})
     try:
-        with urlopen(req, timeout=timeout_sec) as resp:
+        with urlopen(req, timeout=timeout_sec, context=_TLS_CONTEXT) as resp:
             status = int(getattr(resp, "status", resp.getcode()))
             raw = resp.read()
         try:
@@ -77,7 +81,7 @@ def _http_post_json(url: str, payload: dict[str, Any], *, headers: Optional[dict
         hdrs.update(headers)
     req = Request(url=url, data=body, method="POST", headers=hdrs)
     try:
-        with urlopen(req, timeout=timeout_sec) as resp:
+        with urlopen(req, timeout=timeout_sec, context=_TLS_CONTEXT) as resp:
             status = int(getattr(resp, "status", resp.getcode()))
             raw = resp.read()
         try:
@@ -170,8 +174,13 @@ def main(argv: list[str]) -> int:
     )
     p.add_argument(
         "--base-url",
-        default=os.getenv("GATEWAY_BASE_URL") or "http://127.0.0.1:8800",
+        default=os.getenv("GATEWAY_BASE_URL") or "https://127.0.0.1:8800",
         help="Gateway base URL for querying /health and /v1/models.",
+    )
+    p.add_argument(
+        "--insecure",
+        action="store_true",
+        help="Disable TLS certificate verification (useful for self-signed local certs).",
     )
     p.add_argument(
         "--token",
@@ -190,6 +199,13 @@ def main(argv: list[str]) -> int:
     )
 
     ns = p.parse_args(argv)
+
+    insecure = ns.insecure or (os.getenv("GATEWAY_TLS_INSECURE") or "").strip().lower() in {"1", "true", "yes", "on"}
+    global _TLS_CONTEXT
+    if insecure:
+        _TLS_CONTEXT = ssl._create_unverified_context()
+    else:
+        _TLS_CONTEXT = ssl.create_default_context()
 
     ns.token = (ns.token or "").strip() or _env_gateway_token()
 

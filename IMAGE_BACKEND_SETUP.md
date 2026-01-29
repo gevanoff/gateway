@@ -94,7 +94,7 @@ InvokeAI:
   Web Server:
     host: 0.0.0.0
     port: 7860
-    allow_origins: ["http://ada2:8800", "http://127.0.0.1:8800"]
+    allow_origins: ["https://ada2:8800", "https://127.0.0.1:8800"]
     
   Generation:
     sequential_guidance: false
@@ -264,7 +264,7 @@ curl -X POST http://ada2:7860/v1/images/generations \
 
 ```bash
 # Should route to gpu_heavy (ada2)
-curl -X POST http://127.0.0.1:8800/v1/images/generations \
+curl -k -X POST https://127.0.0.1:8800/v1/images/generations \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -281,7 +281,7 @@ curl -X POST http://127.0.0.1:8800/v1/images/generations \
 ```bash
 # Send 3 requests simultaneously (limit is 2)
 for i in {1..3}; do
-  curl -X POST http://127.0.0.1:8800/v1/images/generations \
+  curl -k -X POST https://127.0.0.1:8800/v1/images/generations \
     -H "Authorization: Bearer $TOKEN" \
     -H "Content-Type: application/json" \
     -d '{"prompt": "test '$i'", "size": "512x512"}' &
@@ -308,7 +308,7 @@ watch -n 1 nvidia-smi
 ### Check Gateway Stats
 
 ```bash
-curl http://127.0.0.1:8800/v1/gateway/status \
+curl -k https://127.0.0.1:8800/v1/gateway/status \
   -H "Authorization: Bearer $TOKEN" | jq
 ```
 
@@ -404,7 +404,7 @@ Verify end-to-end:
 python tools/verify_gateway.py --check-images
 
 # Or against a running gateway:
-python tools/verify_gateway.py --base-url http://127.0.0.1:8800 --token "$GATEWAY_BEARER_TOKEN" --check-images
+python tools/verify_gateway.py --base-url https://127.0.0.1:8800 --token "$GATEWAY_BEARER_TOKEN" --check-images --insecure
 ```
 
 ### Images are base64 instead of URLs

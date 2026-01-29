@@ -94,7 +94,7 @@ This migration removes image generation from the macOS Nexa/MLX backend and rout
    sleep 30
    
    # Check status
-   curl http://127.0.0.1:8800/v1/gateway/status \
+   curl -k https://127.0.0.1:8800/v1/gateway/status \
      -H "Authorization: Bearer $TOKEN" | jq
    
    # Should show gpu_heavy.images: {healthy: true, ready: true}
@@ -102,7 +102,7 @@ This migration removes image generation from the macOS Nexa/MLX backend and rout
 
 4. **Test image generation**
    ```bash
-   curl -X POST http://127.0.0.1:8800/v1/images/generations \
+   curl -k -X POST https://127.0.0.1:8800/v1/images/generations \
      -H "Authorization: Bearer $TOKEN" \
      -H "Content-Type: application/json" \
      -d '{"prompt": "a beautiful sunset", "size": "1024x1024"}' | jq
@@ -153,7 +153,7 @@ pytest tests/test_ada2_images.py -v
 ### Manual Verification
 ```bash
 # 1. Check gateway status
-curl http://127.0.0.1:8800/v1/gateway/status \
+curl -k https://127.0.0.1:8800/v1/gateway/status \
   -H "Authorization: Bearer $TOKEN" | jq
 
 # Should show:
@@ -161,7 +161,7 @@ curl http://127.0.0.1:8800/v1/gateway/status \
 # - backend_health.gpu_heavy: {healthy: true, ready: true}
 
 # 2. Generate test image
-curl -X POST http://127.0.0.1:8800/v1/images/generations \
+curl -k -X POST https://127.0.0.1:8800/v1/images/generations \
   -H "Authorization: Bearer $TOKEN" \
   -d '{"prompt": "red apple", "size": "512x512"}' | jq
 
@@ -170,7 +170,7 @@ curl -X POST http://127.0.0.1:8800/v1/images/generations \
 
 # 3. Test overload (send 3 requests, limit is 2)
 for i in {1..3}; do
-  curl -X POST http://127.0.0.1:8800/v1/images/generations \
+   curl -k -X POST https://127.0.0.1:8800/v1/images/generations \
     -H "Authorization: Bearer $TOKEN" \
     -d '{"prompt": "test '$i'", "size": "512x512"}' &
 done
@@ -179,7 +179,7 @@ wait
 # One should return 429 with Retry-After: 5
 
 # 4. Verify local_mlx NOT used for images
-curl -X POST http://127.0.0.1:8800/v1/images/generations \
+curl -k -X POST https://127.0.0.1:8800/v1/images/generations \
   -H "Authorization: Bearer $TOKEN" \
   -H "X-Backend: local_mlx" \
   -d '{"prompt": "test", "size": "512x512"}'
@@ -209,7 +209,7 @@ tail -f /var/lib/gateway/logs/gateway.log | grep -i image
 # - GET http://ada2:7860/healthz
 # - GET http://ada2:7860/readyz
 
-curl http://127.0.0.1:8800/v1/gateway/status \
+curl -k https://127.0.0.1:8800/v1/gateway/status \
   -H "Authorization: Bearer $TOKEN" | jq .backend_health.gpu_heavy
 ```
 
