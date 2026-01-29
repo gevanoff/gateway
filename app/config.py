@@ -128,6 +128,10 @@ class Settings(BaseSettings):
     # Optional: FollowYourCanvas video generation shim
     FYC_API_BASE_URL: str = ""
 
+    # Optional: LightOnOCR shim
+    LIGHTON_OCR_API_BASE_URL: str = ""
+    LIGHTON_OCR_TIMEOUT_SEC: float = 120.0
+
     # Optional: PersonaPlex chat shim (custom UI)
     PERSONAPLEX_BASE_URL: str = ""
     PERSONAPLEX_TIMEOUT_SEC: float = 120.0

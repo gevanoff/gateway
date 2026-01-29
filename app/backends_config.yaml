@@ -131,6 +131,30 @@ backends:
       readiness: /readyz
     payload_policy: {}
 
+  lighton_ocr:
+    class: lighton_ocr
+    base_url: ${LIGHTON_OCR_API_BASE_URL}
+    description: LightOnOCR shim
+    supported_capabilities:
+      - ocr
+    concurrency_limits:
+      ocr: 2
+    health:
+      liveness: /healthz
+      readiness: /readyz
+    payload_policy: {}
+
+  personaplex:
+    class: personaplex
+    base_url: ${PERSONAPLEX_BASE_URL}
+    description: PersonaPlex chat shim
+    supported_capabilities: []
+    concurrency_limits: {}
+    health:
+      liveness: /healthz
+      readiness: /readyz
+    payload_policy: {}
+
   luxtts:
     class: luxtts
     base_url: http://ai2:9170

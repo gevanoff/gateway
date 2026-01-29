@@ -122,12 +122,16 @@
         { title: "Images", backends: ["gpu_fast", "gpu_heavy"] },
         { title: "TTS", backends: ["pocket_tts", "luxtts", "qwen3_tts"] },
         { title: "Music", backends: ["heartmula_music"] },
-        { title: "Video", backends: ["followyourcanvas", "skyreels-v2"] },
+        { title: "OCR", backends: ["lighton_ocr"] },
+        { title: "Video", backends: ["followyourcanvas", "skyreels_v2"] },
       ];
 
       const backendLabels = {
         gpu_fast: "SDXL-Turbo",
         gpu_heavy: "InvokeAI",
+        lighton_ocr: "LightOnOCR",
+        personaplex: "PersonaPlex",
+        skyreels_v2: "SkyReels-V2",
       };
 
       const backendMap = new Map();
