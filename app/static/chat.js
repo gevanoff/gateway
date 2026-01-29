@@ -134,8 +134,14 @@
         skyreels_v2: "SkyReels-V2",
       };
 
+      const normalizeBackendClass = (name) => (name === "skyreels-v2" ? "skyreels_v2" : name);
+      const normalizedBackends = data.backends.map((backend) => ({
+        ...backend,
+        backend_class: normalizeBackendClass(backend.backend_class),
+      }));
+
       const backendMap = new Map();
-      data.backends.forEach((backend) => {
+      normalizedBackends.forEach((backend) => {
         backendMap.set(backend.backend_class, backend);
       });
 
@@ -243,7 +249,7 @@
         renderGroup(group.title, group.backends);
       });
 
-      const extraBackends = data.backends
+      const extraBackends = normalizedBackends
         .map((backend) => backend.backend_class)
         .filter((backendClass) => backendClass && !used.has(backendClass));
       if (extraBackends.length > 0) {
