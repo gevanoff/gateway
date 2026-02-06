@@ -8,6 +8,18 @@ FastAPI “Local AI Gateway” exposing OpenAI-ish endpoints and an internal too
 - The example env file in `app/.env.example` binds to loopback by default. If you bind to `0.0.0.0` for LAN access, use IP allowlisting/firewall rules.
 - Operational deployment and configuration guidance lives in `ai-infra/services/gateway/README.md`.
 
+### Observability endpoints (local HTTP)
+
+Health, readiness, and metrics are served over **unencrypted local HTTP** on the observability listener:
+
+- `GET /health`
+- `GET /readyz`
+- `GET /health/upstreams`
+- `GET /metrics`
+
+Defaults: `OBSERVABILITY_HOST=127.0.0.1`, `OBSERVABILITY_PORT=8801`.
+API traffic remains HTTPS on the main gateway port.
+
 ### TLS / HTTPS
 
 - The gateway can be configured to serve HTTPS directly by setting `GATEWAY_TLS_CERT_PATH`
@@ -107,7 +119,7 @@ Run the full contract tests + a live HTTP smoke suite:
 
 Options:
 
-- Check an already-running gateway: `python tools/verify_gateway.py --base-url https://127.0.0.1:8800 --token <token> --insecure`
+- Check an already-running gateway: `python tools/verify_gateway.py --base-url https://127.0.0.1:8800 --obs-url http://127.0.0.1:8801 --token <token> --insecure`
 - Require a healthy backend (otherwise backend-dependent checks are skipped): `--require-backend`
 - Appliance smoke-test mode (implies backend required): `--appliance`
 - Skip pytest (HTTP checks only): `--skip-pytest`

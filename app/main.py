@@ -25,6 +25,7 @@ from app.music_routes import router as music_router
 from app import memory_v2
 from app import metrics
 from app import user_store
+from app.observability_server import ObservabilityServer
 
 
 async def _startup_check_models() -> None:
@@ -67,6 +68,8 @@ async def lifespan(_app: FastAPI):
     
     init_backends()
     init_health_checker()
+    observability = ObservabilityServer()
+    observability.start()
     try:
         user_store.init_db(S.USER_DB_PATH)
     except Exception as e:
@@ -80,6 +83,7 @@ async def lifespan(_app: FastAPI):
     
     # Stop health checker on shutdown
     await stop_health_checker()
+    observability.stop()
 
 
 app = FastAPI(title="Local AI Gateway", version="0.1", lifespan=lifespan)

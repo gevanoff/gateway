@@ -10,6 +10,7 @@ import subprocess
 import sys
 import time
 import ssl
+from urllib.parse import urlparse
 from dataclasses import dataclass
 from typing import Any, Optional
 from urllib.error import HTTPError, URLError
@@ -68,6 +69,22 @@ def _find_free_port() -> int:
         s.bind(("127.0.0.1", 0))
         s.listen(1)
         return int(s.getsockname()[1])
+
+
+    def _derive_obs_url(base_url: str) -> str:
+        override = (os.getenv("GATEWAY_OBS_URL") or "").strip()
+        if override:
+            return override
+
+        obs_port = (os.getenv("OBSERVABILITY_PORT") or "8801").strip()
+        try:
+            obs_port_int = int(obs_port)
+        except Exception:
+            obs_port_int = 8801
+
+        parsed = urlparse(base_url)
+        host = parsed.hostname or "127.0.0.1"
+        return f"http://{host}:{obs_port_int}"
 
 
 @dataclass
@@ -202,7 +219,7 @@ def _load_golden(path: str) -> dict[str, Any] | None:
         return None
 
 
-def _run_checks(*, base_url: str, token: str, require_backend: bool, golden_path: str, ttft_budget_ms: float, total_budget_ms: float) -> tuple[list[CheckResult], dict[str, Any]]:
+def _run_checks(*, base_url: str, obs_url: str, token: str, require_backend: bool, golden_path: str, ttft_budget_ms: float, total_budget_ms: float) -> tuple[list[CheckResult], dict[str, Any]]:
     checks: list[CheckResult] = []
     meta: dict[str, Any] = {
         "base_url": base_url,
@@ -217,7 +234,7 @@ def _run_checks(*, base_url: str, token: str, require_backend: bool, golden_path
     # Health / upstream status
     backends_ok = False
     try:
-        status, _h, body = _http_request("GET", base_url.rstrip("/") + "/health/upstreams", headers=bearer, timeout_sec=5.0)
+        status, _h, body = _http_request("GET", obs_url.rstrip("/") + "/health/upstreams", headers=bearer, timeout_sec=5.0)
         if status == 200:
             payload = _json_from_bytes(body)
             ok = isinstance(payload, dict) and any(bool(v.get("ok")) for v in payload.values() if isinstance(v, dict))
@@ -345,6 +362,7 @@ def main() -> int:
 
     ap = argparse.ArgumentParser(description="Local eval harness for the gateway (quality/safety/regressions).")
     ap.add_argument("--base-url", default=os.getenv("GATEWAY_BASE_URL", "https://127.0.0.1:8800"), help="Gateway base URL")
+    ap.add_argument("--obs-url", default=os.getenv("GATEWAY_OBS_URL", ""), help="Observability base URL (defaults to derive from base URL)")
     ap.add_argument(
         "--insecure",
         action="store_true",
@@ -381,11 +399,13 @@ def main() -> int:
 
     server_proc: subprocess.Popen | None = None
     base_url = str(args.base_url)
+    obs_url = str(args.obs_url or "").strip()
 
     if args.start_server:
         # Start a local uvicorn for evals (best-effort). This is for dev usage; production uses launchd/systemd.
         port = _find_free_port()
         base_url = f"http://127.0.0.1:{port}"
+        obs_url = base_url
         cmd = [sys.executable, "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", str(port)]
         server_proc = subprocess.Popen(cmd, cwd=os.path.dirname(os.path.dirname(__file__)))
         # Give it a moment.
@@ -397,6 +417,7 @@ def main() -> int:
     try:
         checks, meta = _run_checks(
             base_url=base_url,
+            obs_url=(obs_url or _derive_obs_url(base_url)),
             token=str(args.token),
             require_backend=bool(args.require_backend),
             golden_path=str(args.golden or ""),

@@ -17,6 +17,11 @@ class Settings(BaseSettings):
     GATEWAY_PORT: int = 8800
     GATEWAY_BEARER_TOKEN: str
 
+    # Observability listener (local HTTP only)
+    OBSERVABILITY_ENABLED: bool = True
+    OBSERVABILITY_HOST: str = "127.0.0.1"
+    OBSERVABILITY_PORT: int = 8801
+
     # TLS for incoming connections (gateway server)
     # When both are set, the gateway (uvicorn) can be started with these files
     # to serve HTTPS directly. Typical production deployments use a reverse

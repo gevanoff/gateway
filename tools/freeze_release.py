@@ -23,6 +23,7 @@ import shutil
 import subprocess
 import sys
 import ssl
+from urllib.parse import urlparse
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple
@@ -114,6 +115,22 @@ def _best_effort(fn, *args, **kwargs) -> BestEffortField:
         return BestEffortField(value=None, error=f"{type(e).__name__}: {e}")
 
 
+    def _derive_obs_url(base_url: str) -> str:
+        override = (os.getenv("GATEWAY_OBS_URL") or "").strip()
+        if override:
+            return override
+
+        obs_port = (os.getenv("OBSERVABILITY_PORT") or "8801").strip()
+        try:
+            obs_port_int = int(obs_port)
+        except Exception:
+            obs_port_int = 8801
+
+        parsed = urlparse(base_url)
+        host = parsed.hostname or "127.0.0.1"
+        return f"http://{host}:{obs_port_int}"
+
+
 def _env_gateway_token() -> str:
     tok = (os.getenv("GATEWAY_BEARER_TOKEN") or "").strip()
     if tok:
@@ -175,7 +192,12 @@ def main(argv: list[str]) -> int:
     p.add_argument(
         "--base-url",
         default=os.getenv("GATEWAY_BASE_URL") or "https://127.0.0.1:8800",
-        help="Gateway base URL for querying /health and /v1/models.",
+        help="Gateway base URL for /v1/* queries.",
+    )
+    p.add_argument(
+        "--obs-url",
+        default=os.getenv("GATEWAY_OBS_URL") or "",
+        help="Observability base URL for /health and /health/upstreams (defaults to derive from base URL).",
     )
     p.add_argument(
         "--insecure",
@@ -219,12 +241,14 @@ def main(argv: list[str]) -> int:
     if ns.token.strip():
         bearer["authorization"] = f"Bearer {ns.token.strip()}"
 
+    obs_url = (ns.obs_url or "").strip() or _derive_obs_url(ns.base_url)
+
     # Gateway queries (best-effort)
-    health = _best_effort(_http_json, "GET", ns.base_url.rstrip("/") + "/health", headers=bearer, timeout_sec=3.0)
+    health = _best_effort(_http_json, "GET", obs_url.rstrip("/") + "/health", headers=bearer, timeout_sec=3.0)
     upstreams = _best_effort(
         _http_json,
         "GET",
-        ns.base_url.rstrip("/") + "/health/upstreams",
+        obs_url.rstrip("/") + "/health/upstreams",
         headers=bearer,
         timeout_sec=5.0,
     )

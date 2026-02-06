@@ -7,6 +7,7 @@ import base64
 import json
 import os
 import socket
+from urllib.parse import urlparse
 import ssl
 import subprocess
 import sys
@@ -57,6 +58,22 @@ def _find_free_port() -> int:
         s.bind(("127.0.0.1", 0))
         s.listen(1)
         return int(s.getsockname()[1])
+
+
+def _derive_obs_url(base_url: str) -> str:
+    override = (os.getenv("GATEWAY_OBS_URL") or "").strip()
+    if override:
+        return override
+
+    obs_port = (os.getenv("OBSERVABILITY_PORT") or "8801").strip()
+    try:
+        obs_port_int = int(obs_port)
+    except Exception:
+        obs_port_int = 8801
+
+    parsed = urlparse(base_url)
+    host = parsed.hostname or "127.0.0.1"
+    return f"http://{host}:{obs_port_int}"
 
 
 @dataclass
@@ -144,14 +161,14 @@ def _http_stream_until_done(
         return False, f"{type(e).__name__}: {e}"
 
 
-def _wait_for_health(base_url: str, token: str, *, timeout_sec: float = 15.0) -> None:
+def _wait_for_health(obs_url: str, token: str, *, timeout_sec: float = 15.0) -> None:
     headers = {"authorization": f"Bearer {token}"}
     deadline = time.time() + timeout_sec
     last_err: Optional[str] = None
 
     while time.time() < deadline:
         try:
-            status, _h, body = _http_request("GET", base_url.rstrip("/") + "/health", headers=headers, timeout_sec=2.5)
+            status, _h, body = _http_request("GET", obs_url.rstrip("/") + "/health", headers=headers, timeout_sec=2.5)
             if status == 200:
                 return
             last_err = f"status={status} body={(body[:200] or b'').decode('utf-8', errors='replace')}"
@@ -235,7 +252,7 @@ def _stop_process(proc: subprocess.Popen, *, timeout_sec: float = 5.0) -> None:
             pass
 
 
-def _run_http_checks(*, base_url: str, token: str, require_backend: bool, check_images: bool) -> list[CheckResult]:
+def _run_http_checks(*, base_url: str, obs_url: str, token: str, require_backend: bool, check_images: bool) -> list[CheckResult]:
     results: list[CheckResult] = []
 
     def ok(name: str, detail: str = "") -> None:
@@ -248,7 +265,7 @@ def _run_http_checks(*, base_url: str, token: str, require_backend: bool, check_
 
     # /health (GET + HEAD)
     try:
-        status, _h, body = _http_request("GET", base_url.rstrip("/") + "/health", headers=bearer, timeout_sec=10.0)
+        status, _h, body = _http_request("GET", obs_url.rstrip("/") + "/health", headers=bearer, timeout_sec=10.0)
         if status == 200:
             ok("health_get")
         else:
@@ -258,7 +275,7 @@ def _run_http_checks(*, base_url: str, token: str, require_backend: bool, check_
         return results
 
     try:
-        status, _h, _body = _http_request("HEAD", base_url.rstrip("/") + "/health", headers=bearer, timeout_sec=10.0)
+        status, _h, _body = _http_request("HEAD", obs_url.rstrip("/") + "/health", headers=bearer, timeout_sec=10.0)
         if status == 200:
             ok("health_head")
         else:
@@ -266,9 +283,9 @@ def _run_http_checks(*, base_url: str, token: str, require_backend: bool, check_
     except Exception as e:
         bad("health_head", f"{type(e).__name__}: {e}")
 
-    # /metrics (auth-protected)
+    # /metrics (local observability listener)
     try:
-        status, _h, body = _http_request("GET", base_url.rstrip("/") + "/metrics", headers=bearer, timeout_sec=10.0)
+        status, _h, body = _http_request("GET", obs_url.rstrip("/") + "/metrics", headers=bearer, timeout_sec=10.0)
         if status == 200 and body.strip():
             ok("metrics")
         else:
@@ -435,7 +452,7 @@ def _run_http_checks(*, base_url: str, token: str, require_backend: bool, check_
                 "POST",
                 v1 + "/tools/http_fetch",
                 headers=bearer,
-                json_body={"arguments": {"url": base_url.rstrip("/") + "/health", "method": "GET"}},
+                json_body={"arguments": {"url": obs_url.rstrip("/") + "/health", "method": "GET"}},
             )
             if status == 200:
                 try:
@@ -460,7 +477,7 @@ def _run_http_checks(*, base_url: str, token: str, require_backend: bool, check_
                 "POST",
                 v1 + "/tools/http_fetch_local",
                 headers=bearer,
-                json_body={"arguments": {"url": base_url.rstrip("/") + "/health", "method": "GET"}},
+                json_body={"arguments": {"url": obs_url.rstrip("/") + "/health", "method": "GET"}},
             )
             if status == 200:
                 try:
@@ -521,7 +538,7 @@ def _run_http_checks(*, base_url: str, token: str, require_backend: bool, check_
     # Backend-dependent checks
     backends_ok = False
     try:
-        status, _h, body = _http_request("GET", base_url.rstrip("/") + "/health/upstreams", headers=bearer)
+        status, _h, body = _http_request("GET", obs_url.rstrip("/") + "/health/upstreams", headers=bearer)
         if status == 200:
             try:
                 payload = json.loads(body.decode("utf-8"))
@@ -686,6 +703,11 @@ def main(argv: list[str]) -> int:
         help="If set, do HTTPS checks against an already-running gateway (e.g. https://127.0.0.1:8800).",
     )
     p.add_argument(
+        "--obs-url",
+        default="",
+        help="Optional observability base URL for /health and /metrics (default: derive from base URL or $GATEWAY_OBS_URL).",
+    )
+    p.add_argument(
         "--insecure",
         action="store_true",
         help="Disable TLS certificate verification (useful for self-signed local certs).",
@@ -693,7 +715,7 @@ def main(argv: list[str]) -> int:
     p.add_argument(
         "--token",
         default="",
-        help="Bearer token for /health, /v1/*, /metrics (default: $GATEWAY_BEARER_TOKEN or first of $GATEWAY_BEARER_TOKENS).",
+        help="Bearer token for /v1/* (default: $GATEWAY_BEARER_TOKEN or first of $GATEWAY_BEARER_TOKENS).",
     )
     p.add_argument("--skip-pytest", action="store_true", help="Skip running pytest.")
     p.add_argument(
@@ -739,6 +761,7 @@ def main(argv: list[str]) -> int:
 
     proc: Optional[subprocess.Popen] = None
     base_url = (ns.base_url or "").strip()
+    obs_url = (ns.obs_url or "").strip()
 
     if base_url and not token:
         results.append(
@@ -761,6 +784,7 @@ def main(argv: list[str]) -> int:
 
         port = _find_free_port()
         base_url = f"http://127.0.0.1:{port}"
+        obs_url = f"http://127.0.0.1:{port}"
 
         env = dict(os.environ)
         env.setdefault("GATEWAY_BEARER_TOKEN", token)
@@ -771,7 +795,7 @@ def main(argv: list[str]) -> int:
 
         proc = _start_uvicorn(cwd=repo_root, port=port, env=env)
         try:
-            _wait_for_health(base_url, token)
+            _wait_for_health(obs_url or base_url, token)
             results.append(CheckResult(name="start_server", ok=True, detail=base_url))
         except Exception as e:
             results.append(CheckResult(name="start_server", ok=False, detail=f"{type(e).__name__}: {e}"))
@@ -786,8 +810,10 @@ def main(argv: list[str]) -> int:
             return _print_results(results)
 
     try:
+        resolved_obs = obs_url or _derive_obs_url(base_url)
         http_results = _run_http_checks(
             base_url=base_url,
+            obs_url=resolved_obs,
             token=token,
             require_backend=ns.require_backend,
             check_images=bool(ns.check_images),
