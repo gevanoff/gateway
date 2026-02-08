@@ -179,7 +179,7 @@ def append_message(conversation_id: str, msg: Dict[str, Any]) -> Conversation:
     }
 
     # Optional structured fields.
-    for k in ["type", "url", "backend", "model", "reason", "mime", "sha256"]:
+    for k in ["type", "url", "backend", "model", "reason", "mime", "sha256", "filename", "bytes", "attachments"]:
         if k in msg and msg.get(k) is not None:
             entry[k] = msg.get(k)
 

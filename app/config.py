@@ -65,6 +65,11 @@ class Settings(BaseSettings):
     UI_IMAGE_TTL_SEC: int = 900
     UI_IMAGE_MAX_BYTES: int = 50_000_000
 
+    # Tokenless UI file attachments (chat uploads)
+    UI_FILE_DIR: str = "/var/lib/gateway/data/ui_files"
+    UI_FILE_TTL_SEC: int = 60 * 60 * 24 * 7  # 7 days
+    UI_FILE_MAX_BYTES: int = 100_000_000
+
     # Tokenless UI chat persistence
     # Stored on disk and served only to allowlisted UI clients (still gated by UI_IP_ALLOWLIST).
     UI_CHAT_DIR: str = "/var/lib/gateway/data/ui_chats"

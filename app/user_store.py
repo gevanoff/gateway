@@ -437,7 +437,7 @@ def append_message(db_path: str, *, user_id: int, conversation_id: str, msg: Dic
         "content": content or "",
         "ts": int(msg.get("ts") or _now()),
     }
-    for k in ["type", "url", "backend", "model", "reason", "mime", "sha256"]:
+    for k in ["type", "url", "backend", "model", "reason", "mime", "sha256", "filename", "bytes", "attachments"]:
         if k in msg and msg.get(k) is not None:
             entry[k] = msg.get(k)
 

@@ -6,6 +6,7 @@ import hashlib
 import ipaddress
 import json
 import logging
+import mimetypes
 import os
 import re
 import secrets
@@ -313,6 +314,26 @@ def _mime_to_ext(mime: str) -> str:
     return "bin"
 
 
+def _cleanup_ui_files(path: str, *, ttl_sec: int) -> None:
+    if ttl_sec <= 0:
+        return
+    now = time.time()
+    cutoff = now - float(ttl_sec)
+    try:
+        for name in os.listdir(path):
+            full = os.path.join(path, name)
+            try:
+                st = os.stat(full)
+                if st.st_mtime < cutoff:
+                    os.remove(full)
+            except FileNotFoundError:
+                continue
+            except Exception:
+                continue
+    except Exception:
+        return
+
+
 def _sniff_mime(raw: bytes) -> str | None:
     # Best-effort sniff based on magic bytes.
     if not raw:
@@ -339,6 +360,24 @@ def _ui_audio_ttl_sec() -> int:
         return int(getattr(S, "UI_AUDIO_TTL_SEC", 900) or 900)
     except Exception:
         return 900
+
+
+def _ui_file_dir() -> str:
+    return (getattr(S, "UI_FILE_DIR", "") or "/var/lib/gateway/data/ui_files").strip() or "/var/lib/gateway/data/ui_files"
+
+
+def _ui_file_ttl_sec() -> int:
+    try:
+        return int(getattr(S, "UI_FILE_TTL_SEC", 0) or 0)
+    except Exception:
+        return 0
+
+
+def _ui_file_max_bytes() -> int:
+    try:
+        return int(getattr(S, "UI_FILE_MAX_BYTES", 0) or 0)
+    except Exception:
+        return 0
 
 
 def _ui_audio_max_bytes() -> int:
@@ -579,6 +618,59 @@ def _save_ui_image(*, b64: str, mime_hint: str) -> tuple[str, str, str]:
     os.replace(tmp, dst)
 
     return f"/ui/images/{name}", mime, sha256
+
+
+def _safe_ext_from_filename(filename: str, mime: str) -> str:
+    base_ext = ""
+    if filename:
+        _, ext = os.path.splitext(filename)
+        if ext:
+            base_ext = ext.lstrip(".").lower()
+    if base_ext and re.fullmatch(r"[a-z0-9]{1,12}", base_ext):
+        return base_ext
+    guessed = mimetypes.guess_extension(mime or "") or ""
+    guessed = guessed.lstrip(".").lower()
+    if guessed and re.fullmatch(r"[a-z0-9]{1,12}", guessed):
+        return guessed
+    return "bin"
+
+
+async def _save_ui_file(*, upload: UploadFile) -> Dict[str, Any]:
+    file_dir = _ui_file_dir()
+    ttl_sec = _ui_file_ttl_sec()
+    max_bytes = _ui_file_max_bytes()
+    _ensure_dir(file_dir)
+    _cleanup_ui_files(file_dir, ttl_sec=ttl_sec)
+
+    raw = await upload.read()
+    if isinstance(raw, str):
+        raw = raw.encode("utf-8")
+    if not isinstance(raw, (bytes, bytearray)):
+        raw = b""
+    if max_bytes > 0 and len(raw) > max_bytes:
+        raise ValueError(f"file too large to cache ({len(raw)} bytes > {max_bytes})")
+
+    sha256 = hashlib.sha256(raw).hexdigest()
+    mime = (upload.content_type or "application/octet-stream").strip() or "application/octet-stream"
+    ext = _safe_ext_from_filename(upload.filename or "", mime)
+    name = f"{secrets.token_urlsafe(18)}.{ext}"
+    name = name.replace("-", "_")
+    if not _SAFE_FILE_RE.match(name):
+        raise ValueError("failed to generate safe filename")
+
+    tmp = os.path.join(file_dir, f".{name}.tmp")
+    dst = os.path.join(file_dir, name)
+    with open(tmp, "wb") as f:
+        f.write(raw)
+    os.replace(tmp, dst)
+
+    return {
+        "filename": upload.filename or name,
+        "url": f"/ui/files/{name}",
+        "mime": mime,
+        "bytes": len(raw),
+        "sha256": sha256,
+    }
 
 
 @router.get("/ui", include_in_schema=False)
@@ -1425,6 +1517,43 @@ async def ui_conversation_append(req: Request, conversation_id: str) -> Dict[str
     return {"ok": True, "updated": updated}
 
 
+@router.post("/ui/api/conversations/{conversation_id}/files", include_in_schema=False)
+async def ui_conversation_files_upload(
+    req: Request, conversation_id: str, files: list[UploadFile] = File(...)
+) -> Dict[str, Any]:
+    _require_ui_access(req)
+    user = _require_user(req)
+    if not files:
+        raise HTTPException(status_code=400, detail="files required")
+
+    if user is None:
+        convo = ui_conversations.load(conversation_id)
+        if convo is None:
+            if not ui_conversations._is_safe_id(conversation_id):
+                raise HTTPException(status_code=404, detail="conversation not found")
+            now = int(time.time())
+            try:
+                convo = ui_conversations.Conversation(id=conversation_id, created=now, updated=now, summary="", messages=[])
+                ui_conversations.save(convo)
+            except Exception:
+                raise HTTPException(status_code=500, detail="conversation not found")
+    else:
+        convo = user_store.get_conversation(S.USER_DB_PATH, user_id=user.id, conversation_id=conversation_id)
+        if convo is None:
+            raise HTTPException(status_code=404, detail="conversation not found")
+
+    saved: list[Dict[str, Any]] = []
+    for upload in files:
+        try:
+            saved.append(await _save_ui_file(upload=upload))
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"failed to save file: {type(e).__name__}: {e}")
+
+    return {"files": saved}
+
+
 @router.get("/ui/images/{name}", include_in_schema=False)
 async def ui_image_file(req: Request, name: str):
     _require_ui_access(req)
@@ -1438,7 +1567,10 @@ async def ui_image_file(req: Request, name: str):
     _ensure_dir(img_dir)
     _cleanup_ui_images(img_dir, ttl_sec=ttl_sec)
 
-    full = os.path.join(img_dir, name)
+    img_dir_real = os.path.realpath(img_dir)
+    full = os.path.realpath(os.path.join(img_dir_real, name))
+    if os.path.commonpath([img_dir_real, full]) != img_dir_real:
+        raise HTTPException(status_code=404, detail="not found")
     try:
         st = os.stat(full)
         if ttl_sec > 0 and (time.time() - float(st.st_mtime)) > float(ttl_sec):
@@ -1464,6 +1596,44 @@ async def ui_image_file(req: Request, name: str):
         "svg": "image/svg+xml",
     }.get(ext, "application/octet-stream")
 
+    headers = {"cache-control": "private, max-age=60"}
+    return FileResponse(full, media_type=media_type, headers=headers)
+
+
+@router.get("/ui/files/{name}", include_in_schema=False)
+async def ui_uploaded_file(req: Request, name: str):
+    _require_ui_access(req)
+    _require_user(req)
+
+    if not _SAFE_FILE_RE.match(name or ""):
+        raise HTTPException(status_code=404, detail="not found")
+
+    file_dir = _ui_file_dir()
+    ttl_sec = _ui_file_ttl_sec()
+    _ensure_dir(file_dir)
+    _cleanup_ui_files(file_dir, ttl_sec=ttl_sec)
+
+    file_dir_real = os.path.realpath(file_dir)
+    full = os.path.realpath(os.path.join(file_dir_real, name))
+    if os.path.commonpath([file_dir_real, full]) != file_dir_real:
+        raise HTTPException(status_code=404, detail="not found")
+    try:
+        st = os.stat(full)
+        if ttl_sec > 0 and (time.time() - float(st.st_mtime)) > float(ttl_sec):
+            try:
+                os.remove(full)
+            except Exception:
+                pass
+            raise HTTPException(status_code=404, detail="expired")
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="not found")
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=404, detail="not found")
+
+    guessed, _ = mimetypes.guess_type(full)
+    media_type = guessed or "application/octet-stream"
     headers = {"cache-control": "private, max-age=60"}
     return FileResponse(full, media_type=media_type, headers=headers)
 
@@ -1643,6 +1813,49 @@ def _build_profile_system_message(user: Optional[user_store.User]) -> ChatMessag
         return None
 
 
+def _coerce_attachments(raw: Any) -> list[Dict[str, Any]]:
+    if not isinstance(raw, list):
+        return []
+    out: list[Dict[str, Any]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        filename = str(item.get("filename") or "").strip()
+        url = str(item.get("url") or "").strip()
+        if not filename or not url:
+            continue
+        entry = {
+            "filename": filename,
+            "url": url,
+            "mime": str(item.get("mime") or "").strip(),
+            "bytes": item.get("bytes"),
+            "sha256": str(item.get("sha256") or "").strip(),
+        }
+        out.append(entry)
+    return out
+
+
+def _attachments_to_lines(attachments: list[Dict[str, Any]]) -> list[str]:
+    lines: list[str] = []
+    for item in attachments:
+        if not isinstance(item, dict):
+            continue
+        filename = str(item.get("filename") or "").strip()
+        url = str(item.get("url") or "").strip()
+        if not filename or not url:
+            continue
+        mime = str(item.get("mime") or "").strip()
+        size = item.get("bytes")
+        bits = []
+        if mime:
+            bits.append(mime)
+        if isinstance(size, int) and size > 0:
+            bits.append(f"{size} bytes")
+        meta = f" ({', '.join(bits)})" if bits else ""
+        lines.append(f"- {filename}{meta}: {url}")
+    return lines
+
+
 def _conversation_to_chat_messages(convo: ui_conversations.Conversation) -> list[ChatMessage]:
     msgs: list[ChatMessage] = []
     if convo.summary:
@@ -1652,7 +1865,7 @@ def _conversation_to_chat_messages(convo: ui_conversations.Conversation) -> list
     # message as the actual user prompt. All earlier messages are folded into a
     # single system-side "context" message so the model can use them for
     # reference but will not attempt to reply to each one separately.
-    items: list[tuple[str, str]] = []
+    items: list[Dict[str, Any]] = []
     for item in convo.messages:
         if not isinstance(item, dict):
             continue
@@ -1661,22 +1874,32 @@ def _conversation_to_chat_messages(convo: ui_conversations.Conversation) -> list
         role = str(item.get("role") or "").strip() or "user"
         content = item.get("content")
         if not isinstance(content, str) or not content.strip():
+            content = ""
+        attachments = item.get("attachments")
+        attachment_list = _coerce_attachments(attachments)
+        if not content.strip() and not attachment_list:
             continue
-        items.append((role, content.strip()))
+        items.append({"role": role, "content": content.strip(), "attachments": attachment_list})
 
     # Find the last user message index
     last_user_idx = -1
     for i in range(len(items) - 1, -1, -1):
-        if items[i][0] == "user":
+        if items[i]["role"] == "user":
             last_user_idx = i
             break
 
     # Build context lines from all messages except the chosen last user prompt.
     context_lines: list[str] = []
-    for i, (role, content) in enumerate(items):
+    for i, item in enumerate(items):
         if i == last_user_idx:
             continue
-        context_lines.append(f"{role}: {content}")
+        role = item["role"]
+        content = item["content"]
+        if content:
+            context_lines.append(f"{role}: {content}")
+        attachment_lines = _attachments_to_lines(item.get("attachments") or [])
+        if attachment_lines:
+            context_lines.append(f"{role} attached files:\n" + "\n".join(attachment_lines))
 
     # Truncate context lines to configured keep size to bound upstream tokens.
     try:
@@ -1694,10 +1917,21 @@ def _conversation_to_chat_messages(convo: ui_conversations.Conversation) -> list
     # should answer to. If no user message exists, fall back to the last
     # available message.
     if last_user_idx != -1:
-        msgs.append(ChatMessage(role="user", content=items[last_user_idx][1]))
+        last_item = items[last_user_idx]
+        content = last_item["content"] or ""
+        attachment_lines = _attachments_to_lines(last_item.get("attachments") or [])
+        if attachment_lines:
+            attachment_block = "Attached files:\n" + "\n".join(attachment_lines)
+            content = f"{content}\n\n{attachment_block}".strip()
+        msgs.append(ChatMessage(role="user", content=content))
     elif items:
-        last_role, last_content = items[-1]
-        msgs.append(ChatMessage(role=last_role, content=last_content))
+        last_item = items[-1]
+        content = last_item["content"] or ""
+        attachment_lines = _attachments_to_lines(last_item.get("attachments") or [])
+        if attachment_lines:
+            attachment_block = "Attached files:\n" + "\n".join(attachment_lines)
+            content = f"{content}\n\n{attachment_block}".strip()
+        msgs.append(ChatMessage(role=last_item["role"], content=content))
 
     return msgs
 
@@ -1820,7 +2054,14 @@ def _conversation_payload_to_chat_messages(convo: Dict[str, Any]) -> list[ChatMe
         if str(item.get("type") or "") == "image":
             continue
         content = item.get("content")
-        if not isinstance(content, str) or not content:
+        if not isinstance(content, str):
+            content = ""
+        attachments = _coerce_attachments(item.get("attachments"))
+        attachment_lines = _attachments_to_lines(attachments)
+        if attachment_lines:
+            attachment_block = "Attached files:\n" + "\n".join(attachment_lines)
+            content = f"{content}\n\n{attachment_block}".strip()
+        if not content:
             continue
 
         if last_role is not None and last_role == role and msgs:
@@ -1834,7 +2075,7 @@ def _conversation_payload_to_chat_messages(convo: Dict[str, Any]) -> list[ChatMe
     # only the last user message as the user prompt to ensure the model directs
     # its reply to the most recent input while still having prior context.
     raw_messages = convo.get("messages")
-    items: list[tuple[str, str]] = []
+    items: list[Dict[str, Any]] = []
     for item in raw_messages:
         if not isinstance(item, dict):
             continue
@@ -1842,21 +2083,30 @@ def _conversation_payload_to_chat_messages(convo: Dict[str, Any]) -> list[ChatMe
             continue
         role = str(item.get("role") or "").strip() or "user"
         content = item.get("content")
-        if not isinstance(content, str) or not content.strip():
+        if not isinstance(content, str):
+            content = ""
+        attachments = _coerce_attachments(item.get("attachments"))
+        if not content.strip() and not attachments:
             continue
-        items.append((role, content.strip()))
+        items.append({"role": role, "content": content.strip(), "attachments": attachments})
 
     last_user_idx = -1
     for i in range(len(items) - 1, -1, -1):
-        if items[i][0] == "user":
+        if items[i]["role"] == "user":
             last_user_idx = i
             break
 
     context_lines: list[str] = []
-    for i, (role, content) in enumerate(items):
+    for i, item in enumerate(items):
         if i == last_user_idx:
             continue
-        context_lines.append(f"{role}: {content}")
+        role = item["role"]
+        content = item["content"]
+        if content:
+            context_lines.append(f"{role}: {content}")
+        attachment_lines = _attachments_to_lines(item.get("attachments") or [])
+        if attachment_lines:
+            context_lines.append(f"{role} attached files:\n" + "\n".join(attachment_lines))
 
     try:
         keep_n = _summary_keep_last_messages()
@@ -1870,10 +2120,21 @@ def _conversation_payload_to_chat_messages(convo: Dict[str, Any]) -> list[ChatMe
         msgs.append(ChatMessage(role="system", content=ctx))
 
     if last_user_idx != -1:
-        msgs.append(ChatMessage(role="user", content=items[last_user_idx][1]))
+        last_item = items[last_user_idx]
+        content = last_item["content"] or ""
+        attachment_lines = _attachments_to_lines(last_item.get("attachments") or [])
+        if attachment_lines:
+            attachment_block = "Attached files:\n" + "\n".join(attachment_lines)
+            content = f"{content}\n\n{attachment_block}".strip()
+        msgs.append(ChatMessage(role="user", content=content))
     elif items:
-        last_role, last_content = items[-1]
-        msgs.append(ChatMessage(role=last_role, content=last_content))
+        last_item = items[-1]
+        content = last_item["content"] or ""
+        attachment_lines = _attachments_to_lines(last_item.get("attachments") or [])
+        if attachment_lines:
+            attachment_block = "Attached files:\n" + "\n".join(attachment_lines)
+            content = f"{content}\n\n{attachment_block}".strip()
+        msgs.append(ChatMessage(role=last_item["role"], content=content))
 
     return msgs
 
@@ -1919,9 +2180,11 @@ async def _summarize_if_needed(convo: ui_conversations.Conversation) -> ui_conve
             continue
         role = str(m.get("role") or "").strip() or "user"
         content = m.get("content")
-        if not isinstance(content, str) or not content.strip():
-            continue
-        head_text_parts.append(f"{role}: {content.strip()}")
+        if isinstance(content, str) and content.strip():
+            head_text_parts.append(f"{role}: {content.strip()}")
+        attachment_lines = _attachments_to_lines(_coerce_attachments(m.get("attachments")))
+        if attachment_lines:
+            head_text_parts.append(f"{role} attached files:\n" + "\n".join(attachment_lines))
 
     if not head_text_parts:
         convo.messages = tail
@@ -2002,6 +2265,7 @@ async def ui_chat_stream(req: Request):
     model = (body.get("model") or "fast").strip()
     conversation_id = str(body.get("conversation_id") or "").strip()
     message_text = body.get("message")
+    attachments = _coerce_attachments(body.get("attachments"))
 
     # Prefer server-side conversation history if a conversation_id is provided.
     if conversation_id:
@@ -2021,9 +2285,12 @@ async def ui_chat_stream(req: Request):
                 except Exception:
                     raise HTTPException(status_code=500, detail="conversation not found")
 
-            if isinstance(message_text, str) and message_text.strip():
+            if (isinstance(message_text, str) and message_text.strip()) or attachments:
                 try:
-                    ui_conversations.append_message(conversation_id, {"role": "user", "content": message_text.strip()})
+                    payload: Dict[str, Any] = {"role": "user", "content": (message_text or "").strip()}
+                    if attachments:
+                        payload["attachments"] = attachments
+                    ui_conversations.append_message(conversation_id, payload)
                     convo = ui_conversations.load(conversation_id) or convo
                 except Exception:
                     pass
@@ -2039,13 +2306,13 @@ async def ui_chat_stream(req: Request):
             convo = user_store.get_conversation(S.USER_DB_PATH, user_id=user.id, conversation_id=conversation_id)
             if convo is None:
                 raise HTTPException(status_code=404, detail="conversation not found")
-            if isinstance(message_text, str) and message_text.strip():
+            if (isinstance(message_text, str) and message_text.strip()) or attachments:
                 try:
                     user_store.append_message(
                         S.USER_DB_PATH,
                         user_id=user.id,
                         conversation_id=conversation_id,
-                        msg={"role": "user", "content": message_text.strip()},
+                        msg={"role": "user", "content": (message_text or "").strip(), "attachments": attachments or None},
                     )
                     convo = user_store.get_conversation(S.USER_DB_PATH, user_id=user.id, conversation_id=conversation_id) or convo
                 except Exception:
