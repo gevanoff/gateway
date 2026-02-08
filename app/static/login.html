@@ -12,11 +12,45 @@
       <meta name="theme-color" content="#0b0d10">
     <title>Gateway — Login</title>
     <style>
-      body { font-family: system-ui, sans-serif; padding: 24px; background:#0f1724; color:#e6eef8 }
-      .card { max-width:420px; margin:40px auto; background:rgba(255,255,255,0.03); padding:20px; border-radius:10px }
-      label { display:block; margin-top:12px; font-size:14px }
-      input { width:100%; padding:8px 10px; margin-top:6px; border-radius:6px; border:1px solid rgba(255,255,255,0.06); background:transparent; color:inherit }
-      button { margin-top:16px; padding:10px 14px; border-radius:8px; border:0; background:#2563eb; color:white }
+      :root { color-scheme: dark; }
+      body {
+        font-family: system-ui, sans-serif;
+        padding: 24px;
+        background:
+          radial-gradient(1200px 600px at 20% -10%, rgba(111,184,255,0.16), transparent 60%),
+          radial-gradient(900px 500px at 80% 0%, rgba(139,227,201,0.12), transparent 55%),
+          linear-gradient(180deg, #0a0d12 0%, #0c1016 100%);
+        color:#e6eef8;
+      }
+      .card {
+        max-width:420px;
+        margin:40px auto;
+        background: linear-gradient(180deg, rgba(13,20,30,0.96), rgba(8,13,20,0.96));
+        padding:20px;
+        border-radius:12px;
+        border: 1px solid rgba(231,237,246,0.12);
+        box-shadow: 0 12px 30px rgba(6,10,16,0.35);
+      }
+      label { display:block; margin-top:12px; font-size:14px; color: #c6d2e4; }
+      input {
+        width:100%;
+        padding:8px 10px;
+        margin-top:6px;
+        border-radius:8px;
+        border:1px solid rgba(231,237,246,0.12);
+        background: linear-gradient(180deg, rgba(20,26,34,0.95), rgba(14,19,27,0.95));
+        color:inherit;
+      }
+      button {
+        margin-top:16px;
+        padding:10px 14px;
+        border-radius:8px;
+        border:1px solid rgba(231,237,246,0.12);
+        background: linear-gradient(180deg, rgba(37,99,235,0.85), rgba(28,72,170,0.9));
+        color:white;
+        cursor: pointer;
+        box-shadow: 0 10px 20px rgba(8,12,18,0.35);
+      }
       .meta { margin-top:12px; font-size:13px; color: #9fb3d6 }
     </style>
   </head>

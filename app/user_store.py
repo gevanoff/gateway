@@ -130,6 +130,7 @@ def _default_settings() -> Dict[str, Any]:
         },
         "chat": {
             "history": True,
+            "model_preference": "default",
         },
         "profile": {"system_prompt": "", "tone": ""},
     }

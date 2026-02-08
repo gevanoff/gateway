@@ -518,7 +518,7 @@
     }
 
     // User settings management
-    let userSettings = { ttsVoice: "", ttsBackend: "", showTimestamps: false, audioVolume: 1.0, autoPlayTTS: false, systemPrompt: "", profileTone: "" };
+    let userSettings = { ttsVoice: "", ttsBackend: "", showTimestamps: false, audioVolume: 1.0, autoPlayTTS: false, systemPrompt: "", profileTone: "", preferredModel: "default" };
 
     async function loadUserSettings() {
       try {
@@ -534,6 +534,7 @@
           autoPlayTTS: !!(s.audio && s.audio.autoPlayTTS || s.autoPlayTTS),
           systemPrompt: (s.profile && s.profile.system_prompt) || s.profile?.system_prompt || s.profile?.systemPrompt || "",
           profileTone: (s.profile && s.profile.tone) || s.profile?.tone || "",
+          preferredModel: (s.chat && s.chat.model_preference) || s.model_preference || s.modelPreference || "default",
         };
         applyUserSettingsToUi();
       } catch (e) {
@@ -557,6 +558,7 @@
         const showTs = document.getElementById('settings_show_timestamps');
         const vol = document.getElementById('settings_audio_volume');
         const autoplay = document.getElementById('settings_autoplay_tts');
+        const preferredModel = document.getElementById('settings_model_preference');
         // populate voice list if available from TTS voices endpoint
         try {
           if (backendSelect) {
@@ -623,6 +625,7 @@
         if (showTs) showTs.checked = !!userSettings.showTimestamps;
         if (vol) vol.value = String(Number(userSettings.audioVolume || 1));
         if (autoplay) autoplay.checked = !!userSettings.autoPlayTTS;
+        if (preferredModel) preferredModel.value = userSettings.preferredModel || "default";
         // populate profile fields
         try {
           const sys = document.getElementById('settings_system_prompt');
@@ -670,6 +673,7 @@
       const showTs = document.getElementById('settings_show_timestamps');
       const vol = document.getElementById('settings_audio_volume');
       const autoplay = document.getElementById('settings_autoplay_tts');
+      const preferredModel = document.getElementById('settings_model_preference');
       const sys = document.getElementById('settings_system_prompt');
       const tone = document.getElementById('settings_profile_tone');
       const curPwd = document.getElementById('settings_current_password');
@@ -681,6 +685,7 @@
         audioVolume: vol ? Number(vol.value) : 1.0,
         autoPlayTTS: !!(autoplay && autoplay.checked),
         profile: { system_prompt: sys ? String(sys.value || '') : '', tone: tone ? String(tone.value || '') : '' },
+        chat: { model_preference: preferredModel ? String(preferredModel.value || '').trim() || "default" : "default" },
       };
       try {
         // If user provided password fields, attempt password change first.
@@ -719,6 +724,7 @@
         userSettings.autoPlayTTS = !!newSettings.autoPlayTTS;
         userSettings.systemPrompt = newSettings.profile?.system_prompt || "";
         userSettings.profileTone = newSettings.profile?.tone || "";
+        userSettings.preferredModel = newSettings.chat?.model_preference || "default";
         applyUserSettingsToUi();
         closeSettings();
       } catch (e) {
@@ -784,8 +790,8 @@
         modelEl.value = prev;
         return;
       }
-      if (unique.includes("fast")) {
-        modelEl.value = "fast";
+      if (unique.includes("default")) {
+        modelEl.value = "default";
         return;
       }
       if (unique.length) {
@@ -799,7 +805,7 @@
         const text = await resp.text();
         if (handle401(resp)) return;
         if (!resp.ok) {
-          _setModelOptions(["fast"], "fast");
+          _setModelOptions(["default"], userSettings.preferredModel || "default");
           addMessage({ role: "system", content: text, meta: `Models HTTP ${resp.status}` });
           return;
         }
@@ -808,16 +814,16 @@
         try {
           payload = JSON.parse(text);
         } catch {
-          _setModelOptions(["fast"], "fast");
+          _setModelOptions(["default"], userSettings.preferredModel || "default");
           addMessage({ role: "system", content: "Models: invalid JSON" });
           return;
         }
 
         const data = payload && Array.isArray(payload.data) ? payload.data : [];
         const ids = data.map((m) => m && m.id).filter((x) => typeof x === "string");
-        _setModelOptions(ids, "fast");
+        _setModelOptions(ids, userSettings.preferredModel || "default");
       } catch (e) {
-        _setModelOptions(["fast"], "fast");
+        _setModelOptions(["default"], userSettings.preferredModel || "default");
         addMessage({ role: "system", content: `Models error: ${String(e)}` });
       }
     }
@@ -907,7 +913,7 @@
     
 
     async function sendChatMessage(userText) {
-      const model = (modelEl.value || "").trim() || "fast";
+      const model = (modelEl.value || "").trim() || "default";
 
       // Intercept explicit slash-commands here as a safety net so any caller
       // of sendChatMessage will route commands to the correct backend.
