@@ -41,6 +41,7 @@
     const backendStatusUpdated = $("backendStatusUpdated");
     const backendStatusError = $("backendStatusError");
     const backendStatusRefresh = $("backendStatusRefresh");
+    const backendStatusSpinner = $("backendStatusSpinner");
 
     /** @type {{role:'user'|'assistant'|'system', content:string}[]} */
     let history = [];
@@ -265,6 +266,8 @@
 
     async function loadBackendStatus() {
       if (!backendStatusList) return;
+      if (backendStatusRefresh) backendStatusRefresh.disabled = true;
+      if (backendStatusSpinner) backendStatusSpinner.hidden = false;
       if (backendStatusError) backendStatusError.hidden = true;
       try {
         const resp = await fetch("/ui/api/backend_status", { credentials: "same-origin" });
@@ -290,6 +293,9 @@
           empty.textContent = "Unable to load backend status.";
           backendStatusList.appendChild(empty);
         }
+      } finally {
+        if (backendStatusRefresh) backendStatusRefresh.disabled = false;
+        if (backendStatusSpinner) backendStatusSpinner.hidden = true;
       }
     }
 

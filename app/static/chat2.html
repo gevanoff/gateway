@@ -14,8 +14,11 @@
       .topbar { display:flex; gap:10px; align-items:center; flex-wrap:wrap; position: relative; }
       select, input, textarea, button { font: inherit; }
       select, input, textarea { box-sizing: border-box; padding: 10px; border-radius: 10px; border: 1px solid rgba(231,237,246,0.12); background: #12161c; color: #e7edf6; }
-      button { padding: 10px 12px; border-radius: 10px; border: 1px solid rgba(231,237,246,0.14); background: #12161c; color: #e7edf6; cursor: pointer; }
-      button:disabled { opacity: 0.6; cursor: default; }
+      button { padding: 10px 12px; border-radius: 10px; border: 1px solid rgba(231,237,246,0.14); background: #12161c; color: #e7edf6; cursor: pointer; transition: transform 0.08s ease, background 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease; }
+      button:hover { background: #161b22; border-color: rgba(111,184,255,0.4); }
+      button:active { transform: translateY(1px) scale(0.98); background: rgba(111,184,255,0.14); }
+      button:focus-visible { outline: 2px solid rgba(111,184,255,0.6); outline-offset: 2px; }
+      button:disabled { opacity: 0.6; cursor: default; transform: none; }
       .chat { border: 1px solid rgba(231,237,246,0.12); background: #0e1217; border-radius: 12px; padding: 12px; min-height: 340px; height: 60vh; overflow-y: auto; }
       .msg { display:flex; flex-direction:column; gap:6px; padding: 10px; border-radius: 12px; margin: 10px 0; border: 1px solid rgba(231,237,246,0.10); }
       .msg.user { background: rgba(50, 110, 255, 0.10); }
@@ -88,6 +91,17 @@
       .status-aliases { font-size: 12px; color: #b7c4d6; }
       .status-error { font-size: 12px; color: #ffb6b6; }
       .status-empty { font-size: 12px; color: #93a4ba; }
+      .loading-indicator { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: #93a4ba; }
+      .loading-indicator::before {
+        content: "";
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        border: 2px solid rgba(231,237,246,0.18);
+        border-top-color: #6fb8ff;
+        animation: spin 0.8s linear infinite;
+      }
+      @keyframes spin { to { transform: rotate(360deg); } }
       .attachments-panel { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
       .attachments-panel .attachments-list { display: flex; flex-direction: column; gap: 6px; }
       .attachment-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 8px; border-radius: 8px; border: 1px solid rgba(231,237,246,0.12); background: rgba(231,237,246,0.04); font-size: 12px; }
@@ -185,7 +199,10 @@
         <div class="status-body">
           <div class="status-meta">
             <span id="backendStatusUpdated" class="hint">Last updated: --</span>
-            <button id="backendStatusRefresh" type="button">Refresh</button>
+            <div style="display:flex;align-items:center;gap:8px;">
+              <button id="backendStatusRefresh" type="button">Refresh</button>
+              <span id="backendStatusSpinner" class="loading-indicator" hidden>Refreshing…</span>
+            </div>
           </div>
           <div id="backendStatusError" class="status-error" hidden></div>
           <div id="backendStatusList" class="status-list">
