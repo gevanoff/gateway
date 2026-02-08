@@ -73,6 +73,9 @@
       .status-group-title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: #93a4ba; }
       .status-group-list { display: flex; flex-direction: column; gap: 8px; }
       .status-row { display: flex; flex-direction: column; gap: 6px; padding: 10px; border-radius: 10px; border: 1px solid rgba(231,237,246,0.08); background: rgba(231,237,246,0.02); }
+      .status-row.ok { background: rgba(62, 197, 126, 0.12); border-color: rgba(62, 197, 126, 0.28); }
+      .status-row.warn { background: rgba(255, 200, 50, 0.12); border-color: rgba(255, 200, 50, 0.28); }
+      .status-row.bad { background: rgba(255, 90, 90, 0.12); border-color: rgba(255, 90, 90, 0.28); }
       .status-row-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
       .status-name { font-weight: 600; }
       .status-name-alias { font-weight: 400; color: #93a4ba; }
@@ -85,6 +88,20 @@
       .status-aliases { font-size: 12px; color: #b7c4d6; }
       .status-error { font-size: 12px; color: #ffb6b6; }
       .status-empty { font-size: 12px; color: #93a4ba; }
+      .attachments-panel { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+      .attachments-panel .attachments-list { display: flex; flex-direction: column; gap: 6px; }
+      .attachment-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 8px; border-radius: 8px; border: 1px solid rgba(231,237,246,0.12); background: rgba(231,237,246,0.04); font-size: 12px; }
+      .attachment-row .attachment-name { color: #dfe7f3; }
+      .attachment-row .attachment-meta { color: #93a4ba; font-size: 11px; }
+      .attachment-row button { padding: 4px 8px; font-size: 11px; }
+      .message-attachments { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+      .message-attachments a { color: #9fc2ff; }
+      .settings-layout { display: grid; grid-template-columns: 160px 1fr; gap: 16px; align-items: start; }
+      .settings-menu { display: flex; flex-direction: column; gap: 6px; }
+      .settings-menu button { width: 100%; text-align: left; padding: 8px 10px; border-radius: 8px; }
+      .settings-menu button.active { background: rgba(111,184,255,0.16); border-color: rgba(111,184,255,0.4); }
+      .settings-section { display: none; flex-direction: column; gap: 8px; }
+      .settings-section.active { display: flex; }
     </style>
   </head>
   <body>
@@ -139,8 +156,13 @@
         <textarea id="input" placeholder="Message (try: /image a cozy cabin in snow at dusk)"></textarea>
         <div class="right">
           <button id="send">Send</button>
+          <button id="attachBtn" type="button">Attach file</button>
           <div class="hint">Chat streams from <code>/ui/api/chat_stream</code>. Images use <code>/ui/api/image</code>.</div>
         </div>
+      </div>
+      <div class="attachments-panel">
+        <input id="fileInput" type="file" multiple hidden />
+        <div id="attachmentsList" class="attachments-list" hidden></div>
       </div>
 
       <details open style="margin-top:10px">
@@ -182,40 +204,56 @@
           <button id="settingsClose" aria-label="Close">✕</button>
         </header>
         <form id="settingsForm">
-          <div style="display:flex;flex-direction:column;gap:8px">
-            <label>Preferred TTS backend
-              <select id="settings_tts_backend"><option value="">(default)</option></select>
-            </label>
-            <label>Preferred TTS voice
-              <select id="settings_tts_voice"><option value="">(default)</option></select>
-            </label>
-            <label>System prompt
-              <textarea id="settings_system_prompt" placeholder="Optional system prompt to guide assistant for your account" rows="3" style="min-width:100%"></textarea>
-            </label>
-            <label>Tone guidance
-              <input type="text" id="settings_profile_tone" placeholder="e.g. concise, friendly, expert" />
-            </label>
-            <label>Show timestamps
-              <input type="checkbox" id="settings_show_timestamps" />
-            </label>
-            <label>Audio volume
-              <input type="range" id="settings_audio_volume" min="0" max="1" step="0.01" />
-            </label>
-            <label>Auto-play TTS
-              <input type="checkbox" id="settings_autoplay_tts" />
-            </label>
-            <fieldset id="settings_password_fieldset" style="border:1px dashed rgba(231,237,246,0.06);padding:8px;border-radius:8px">
-              <legend style="font-size:13px">Change password</legend>
-              <label>Current password
-                <input type="password" id="settings_current_password" />
-              </label>
-              <label>New password
-                <input type="password" id="settings_new_password" />
-              </label>
-              <label>Confirm new password
-                <input type="password" id="settings_confirm_password" />
-              </label>
-            </fieldset>
+          <div class="settings-layout">
+            <nav class="settings-menu">
+              <button type="button" data-section="settings-backends" class="active">Backends</button>
+              <button type="button" data-section="settings-profile">Profile</button>
+              <button type="button" data-section="settings-ui">UI</button>
+              <button type="button" data-section="settings-security">Security</button>
+            </nav>
+            <div>
+              <section id="settings-backends" class="settings-section active">
+                <label>Preferred TTS backend
+                  <select id="settings_tts_backend"><option value="">(default)</option></select>
+                </label>
+                <label>Preferred TTS voice
+                  <select id="settings_tts_voice"><option value="">(default)</option></select>
+                </label>
+              </section>
+              <section id="settings-profile" class="settings-section">
+                <label>System prompt
+                  <textarea id="settings_system_prompt" placeholder="Optional system prompt to guide assistant for your account" rows="3" style="min-width:100%"></textarea>
+                </label>
+                <label>Tone guidance
+                  <input type="text" id="settings_profile_tone" placeholder="e.g. concise, friendly, expert" />
+                </label>
+              </section>
+              <section id="settings-ui" class="settings-section">
+                <label>Show timestamps
+                  <input type="checkbox" id="settings_show_timestamps" />
+                </label>
+                <label>Audio volume
+                  <input type="range" id="settings_audio_volume" min="0" max="1" step="0.01" />
+                </label>
+                <label>Auto-play TTS
+                  <input type="checkbox" id="settings_autoplay_tts" />
+                </label>
+              </section>
+              <section id="settings-security" class="settings-section">
+                <fieldset id="settings_password_fieldset" style="border:1px dashed rgba(231,237,246,0.06);padding:8px;border-radius:8px">
+                  <legend style="font-size:13px">Change password</legend>
+                  <label>Current password
+                    <input type="password" id="settings_current_password" />
+                  </label>
+                  <label>New password
+                    <input type="password" id="settings_new_password" />
+                  </label>
+                  <label>Confirm new password
+                    <input type="password" id="settings_confirm_password" />
+                  </label>
+                </fieldset>
+              </section>
+            </div>
           </div>
           <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px">
             <button type="button" id="settings_cancel">Cancel</button>

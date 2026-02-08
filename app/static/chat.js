@@ -33,6 +33,9 @@
     const clearChatEl = $("clearChat");
     const resetSessionEl = $("resetSession");
     const settingsBtn = $("settingsBtn");
+    const attachBtn = $("attachBtn");
+    const fileInput = $("fileInput");
+    const attachmentsList = $("attachmentsList");
     const backendStatusPanel = $("backendStatusPanel");
     const backendStatusList = $("backendStatusList");
     const backendStatusUpdated = $("backendStatusUpdated");
@@ -46,6 +49,7 @@
     
     let conversationId = "";
     let conversationResetting = false;
+    let pendingAttachments = [];
 
     function handle401(resp) {
       if (resp && resp.status === 401) {
@@ -164,6 +168,7 @@
         badges.className = "status-badges";
 
         if (missing) {
+          row.classList.add("warn");
           const missingBadge = document.createElement("span");
           missingBadge.className = "status-badge warn";
           missingBadge.textContent = "Not configured";
@@ -181,6 +186,13 @@
           ready.className = `status-badge ${isReady ? "ok" : backend.ready === false ? "bad" : "warn"}`;
           ready.textContent = backend.ready === undefined ? "Readiness unknown" : isReady ? "Ready" : "Not ready";
           badges.appendChild(ready);
+          if (backend.healthy === false && backend.ready === false) {
+            row.classList.add("bad");
+          } else if (isHealthy && isReady) {
+            row.classList.add("ok");
+          } else {
+            row.classList.add("warn");
+          }
         }
 
         header.appendChild(badges);
@@ -295,7 +307,7 @@
       }
     }
 
-    function addMessage({ role, content, meta, html }) {
+    function addMessage({ role, content, meta, html, attachments }) {
       if (!chatEl) return { wrap: null, metaEl: null, contentEl: null };
       const wrap = document.createElement("div");
       wrap.className = `msg ${role}`;
@@ -322,6 +334,38 @@
         contentEl.innerHTML = html;
       } else {
         contentEl.textContent = content || "";
+      }
+
+      if (Array.isArray(attachments) && attachments.length > 0) {
+        const list = document.createElement("div");
+        list.className = "message-attachments";
+        const label = document.createElement("div");
+        label.className = "meta";
+        label.textContent = "Attachments";
+        list.appendChild(label);
+        attachments.forEach((item) => {
+          if (!item) return;
+          const row = document.createElement("div");
+          row.className = "attachment-row";
+          const name = document.createElement("div");
+          name.className = "attachment-name";
+          const link = document.createElement("a");
+          link.href = item.url || "#";
+          link.textContent = item.filename || "attachment";
+          link.target = "_blank";
+          link.rel = "noopener";
+          name.appendChild(link);
+          const meta = document.createElement("div");
+          meta.className = "attachment-meta";
+          const bits = [];
+          if (item.mime) bits.push(item.mime);
+          if (Number.isFinite(item.bytes)) bits.push(`${item.bytes} bytes`);
+          meta.textContent = bits.join(" • ");
+          row.appendChild(name);
+          row.appendChild(meta);
+          list.appendChild(row);
+        });
+        contentEl.appendChild(list);
       }
 
       wrap.appendChild(metaEl);
@@ -419,6 +463,7 @@
       const role = typeof m.role === "string" ? m.role : "assistant";
       const type = typeof m.type === "string" ? m.type : "";
       const content = typeof m.content === "string" ? m.content : "";
+      const attachments = Array.isArray(m.attachments) ? m.attachments : [];
 
       if (type === "image" && typeof m.url === "string" && m.url.trim()) {
         const metaBits = [];
@@ -440,7 +485,7 @@
       if (m.backend) metaBits.push(`backend=${m.backend}`);
       if (m.model) metaBits.push(`model=${m.model}`);
       if (m.reason) metaBits.push(`reason=${m.reason}`);
-      addMessage({ role, content, meta: metaBits.length ? metaBits.join(" • ") : undefined });
+      addMessage({ role, content, meta: metaBits.length ? metaBits.join(" • ") : undefined, attachments });
     }
 
     function clearChatUI() {
@@ -882,8 +927,8 @@
         return;
       }
 
-      history.push({ role: "user", content: userText });
-      addMessage({ role: "user", content: userText });
+      history.push({ role: "user", content: userText, attachments: pendingAttachments });
+      addMessage({ role: "user", content: userText, attachments: pendingAttachments });
 
       const assistant = addMessage({ role: "assistant", content: "", meta: "Assistant" });
       assistant.contentEl.textContent = "";
@@ -903,7 +948,7 @@
             method: "POST",
             credentials: "same-origin",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ model, conversation_id: conversationId, message: userText }),
+            body: JSON.stringify({ model, conversation_id: conversationId, message: userText, attachments: pendingAttachments }),
           });
 
         let resp = await sendRequest();
@@ -1058,6 +1103,8 @@
         addMessage({ role: "system", content: String(e) });
       } finally {
         setBusy(false);
+        pendingAttachments = [];
+        renderPendingAttachments();
       }
     }
 
@@ -1294,7 +1341,7 @@
       (async () => { await loadUserSettings(); await ensureConversation(); await loadConversation(); })();
       async function handleSendClick() {
         const text = (inputEl.value || '').trim();
-        if (!text) return;
+        if (!text && pendingAttachments.length === 0) return;
         inputEl.value = '';
 
         // Explicit command routing takes precedence.
@@ -1320,7 +1367,6 @@
           return;
         }
 
-        
         await sendChatMessage(text);
       }
 
@@ -1352,6 +1398,22 @@
           void loadBackendStatus();
         });
       }
+      function setActiveSettingsSection(sectionId) {
+        const menuButtons = document.querySelectorAll('.settings-menu button');
+        const sections = document.querySelectorAll('.settings-section');
+        menuButtons.forEach((btn) => {
+          btn.classList.toggle('active', btn.dataset.section === sectionId);
+        });
+        sections.forEach((section) => {
+          section.classList.toggle('active', section.id === sectionId);
+        });
+      }
+      document.querySelectorAll('.settings-menu button').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const target = btn.dataset.section;
+          if (target) setActiveSettingsSection(target);
+        });
+      });
       // Apps menu: toggle and admin-only link visibility
       const appsBtnEl = document.getElementById('appsBtn');
       const appsMenuEl = document.getElementById('appsMenu');
@@ -1398,6 +1460,88 @@
         });
       }
       if (clearEl) clearEl.addEventListener('click', () => { if (inputEl) inputEl.value = ''; });
+      function formatBytes(bytes) {
+        if (!Number.isFinite(bytes)) return "";
+        if (bytes < 1024) return `${bytes} B`;
+        const kb = bytes / 1024;
+        if (kb < 1024) return `${kb.toFixed(1)} KB`;
+        const mb = kb / 1024;
+        return `${mb.toFixed(1)} MB`;
+      }
+      function renderPendingAttachments() {
+        if (!attachmentsList) return;
+        attachmentsList.innerHTML = "";
+        if (!pendingAttachments.length) {
+          attachmentsList.hidden = true;
+          return;
+        }
+        attachmentsList.hidden = false;
+        pendingAttachments.forEach((item, idx) => {
+          const row = document.createElement("div");
+          row.className = "attachment-row";
+          const name = document.createElement("div");
+          name.className = "attachment-name";
+          name.textContent = item.filename || "attachment";
+          const meta = document.createElement("div");
+          meta.className = "attachment-meta";
+          const parts = [];
+          if (item.mime) parts.push(item.mime);
+          if (Number.isFinite(item.bytes)) parts.push(formatBytes(item.bytes));
+          meta.textContent = parts.join(" • ");
+          const removeBtn = document.createElement("button");
+          removeBtn.type = "button";
+          removeBtn.textContent = "Remove";
+          removeBtn.addEventListener("click", () => {
+            pendingAttachments.splice(idx, 1);
+            renderPendingAttachments();
+          });
+          row.appendChild(name);
+          row.appendChild(meta);
+          row.appendChild(removeBtn);
+          attachmentsList.appendChild(row);
+        });
+      }
+      async function uploadAttachments(files) {
+        if (!files || !files.length) return;
+        try {
+          if (!conversationId) {
+            await ensureConversation();
+          }
+          const form = new FormData();
+          for (const file of files) {
+            form.append("files", file, file.name);
+          }
+          const resp = await fetch(`/ui/api/conversations/${encodeURIComponent(conversationId)}/files`, {
+            method: "POST",
+            credentials: "same-origin",
+            body: form,
+          });
+          if (handle401(resp)) return;
+          if (!resp.ok) {
+            const text = await resp.text();
+            addMessage({ role: "system", content: `Upload failed: ${text || resp.status}` });
+            return;
+          }
+          const payload = await resp.json();
+          const uploaded = Array.isArray(payload?.files) ? payload.files : [];
+          uploaded.forEach((item) => {
+            if (item && item.url && item.filename) {
+              pendingAttachments.push(item);
+            }
+          });
+          renderPendingAttachments();
+        } catch (e) {
+          addMessage({ role: "system", content: `Upload failed: ${String(e)}` });
+        }
+      }
+      if (attachBtn && fileInput) {
+        attachBtn.addEventListener("click", () => fileInput.click());
+        fileInput.addEventListener("change", () => {
+          const files = Array.from(fileInput.files || []);
+          fileInput.value = "";
+          void uploadAttachments(files);
+        });
+      }
     });
   })();
   setOutput("Ready.");
