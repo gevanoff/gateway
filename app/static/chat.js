@@ -47,10 +47,11 @@
     let history = [];
 
     const CONVO_KEY = "gw_ui2_conversation_id";
-    
+
     let conversationId = "";
     let conversationResetting = false;
     let pendingAttachments = [];
+    let modelOptionsCache = [];
 
     function handle401(resp) {
       if (resp && resp.status === 401) {
@@ -553,6 +554,9 @@
       // populate form
       (async () => {
         await loadUserSettings();
+        if (!modelOptionsCache.length) {
+          await loadModels();
+        }
         const backendSelect = document.getElementById('settings_tts_backend');
         const select = document.getElementById('settings_tts_voice');
         const showTs = document.getElementById('settings_show_timestamps');
@@ -625,7 +629,9 @@
         if (showTs) showTs.checked = !!userSettings.showTimestamps;
         if (vol) vol.value = String(Number(userSettings.audioVolume || 1));
         if (autoplay) autoplay.checked = !!userSettings.autoPlayTTS;
-        if (preferredModel) preferredModel.value = userSettings.preferredModel || "default";
+        if (preferredModel) {
+          syncSettingsModelSelect(userSettings.preferredModel || "default");
+        }
         // populate profile fields
         try {
           const sys = document.getElementById('settings_system_prompt');
@@ -679,13 +685,14 @@
       const curPwd = document.getElementById('settings_current_password');
       const newPwd = document.getElementById('settings_new_password');
       const confirmPwd = document.getElementById('settings_confirm_password');
+      const chosenModel = normalizePreferredModel(preferredModel ? String(preferredModel.value || "").trim() : "default");
       const newSettings = {
         tts: { voice: select ? select.value : "", backend_class: backendSelect ? backendSelect.value : "" },
         ui: { showTimestamps: !!(showTs && showTs.checked) },
         audioVolume: vol ? Number(vol.value) : 1.0,
         autoPlayTTS: !!(autoplay && autoplay.checked),
         profile: { system_prompt: sys ? String(sys.value || '') : '', tone: tone ? String(tone.value || '') : '' },
-        chat: { model_preference: preferredModel ? String(preferredModel.value || '').trim() || "default" : "default" },
+        chat: { model_preference: chosenModel || "default" },
       };
       try {
         // If user provided password fields, attempt password change first.
@@ -725,6 +732,7 @@
         userSettings.systemPrompt = newSettings.profile?.system_prompt || "";
         userSettings.profileTone = newSettings.profile?.tone || "";
         userSettings.preferredModel = newSettings.chat?.model_preference || "default";
+        syncSettingsModelSelect(userSettings.preferredModel);
         applyUserSettingsToUi();
         closeSettings();
       } catch (e) {
@@ -766,37 +774,59 @@
       };
     }
 
-    function _setModelOptions(modelIds, preferred) {
-      const prev = modelEl.value;
-      modelEl.innerHTML = "";
-
+    function normalizeModelIds(modelIds) {
       const ids = Array.isArray(modelIds) ? modelIds.filter((x) => typeof x === "string" && x.trim()) : [];
-      const unique = Array.from(new Set(ids));
-      unique.sort((a, b) => a.localeCompare(b));
+      const unique = Array.from(new Set(ids.map((x) => x.trim())));
+      if (!unique.includes("default")) unique.push("default");
+      unique.sort((a, b) => {
+        if (a === "default") return -1;
+        if (b === "default") return 1;
+        return a.localeCompare(b);
+      });
+      return unique;
+    }
 
-      for (const id of unique) {
+    function populateModelSelect(selectEl, options) {
+      if (!selectEl) return;
+      selectEl.innerHTML = "";
+      for (const id of options) {
         const opt = document.createElement("option");
         opt.value = id;
         opt.textContent = id;
-        modelEl.appendChild(opt);
+        selectEl.appendChild(opt);
       }
+    }
 
+    function pickModelValue({ options, preferred, fallback }) {
       const want = (preferred || "").trim();
-      if (want && unique.includes(want)) {
-        modelEl.value = want;
-        return;
-      }
-      if (prev && unique.includes(prev)) {
-        modelEl.value = prev;
-        return;
-      }
-      if (unique.includes("default")) {
-        modelEl.value = "default";
-        return;
-      }
-      if (unique.length) {
-        modelEl.value = unique[0];
-      }
+      if (want && options.includes(want)) return want;
+      if (fallback && options.includes(fallback)) return fallback;
+      if (options.includes("default")) return "default";
+      return options[0] || "default";
+    }
+
+    function syncSettingsModelSelect(preferred) {
+      const select = document.getElementById("settings_model_preference");
+      if (!select) return;
+      populateModelSelect(select, modelOptionsCache);
+      const desired = pickModelValue({ options: modelOptionsCache, preferred });
+      select.value = desired;
+    }
+
+    function normalizePreferredModel(preferred) {
+      const desired = (preferred || "").trim();
+      if (!modelOptionsCache.length) return desired || "default";
+      return modelOptionsCache.includes(desired) ? desired : "default";
+    }
+
+    function _setModelOptions(modelIds, preferred) {
+      const prev = modelEl ? modelEl.value : "";
+      const options = normalizeModelIds(modelIds);
+      modelOptionsCache = options;
+      populateModelSelect(modelEl, options);
+      const desired = pickModelValue({ options, preferred, fallback: prev });
+      if (modelEl) modelEl.value = desired;
+      syncSettingsModelSelect(preferred);
     }
 
     async function loadModels() {
