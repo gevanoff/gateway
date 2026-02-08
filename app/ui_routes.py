@@ -1567,7 +1567,10 @@ async def ui_image_file(req: Request, name: str):
     _ensure_dir(img_dir)
     _cleanup_ui_images(img_dir, ttl_sec=ttl_sec)
 
-    full = os.path.join(img_dir, name)
+    img_dir_real = os.path.realpath(img_dir)
+    full = os.path.realpath(os.path.join(img_dir_real, name))
+    if os.path.commonpath([img_dir_real, full]) != img_dir_real:
+        raise HTTPException(status_code=404, detail="not found")
     try:
         st = os.stat(full)
         if ttl_sec > 0 and (time.time() - float(st.st_mtime)) > float(ttl_sec):
@@ -1610,7 +1613,10 @@ async def ui_uploaded_file(req: Request, name: str):
     _ensure_dir(file_dir)
     _cleanup_ui_files(file_dir, ttl_sec=ttl_sec)
 
-    full = os.path.join(file_dir, name)
+    file_dir_real = os.path.realpath(file_dir)
+    full = os.path.realpath(os.path.join(file_dir_real, name))
+    if os.path.commonpath([file_dir_real, full]) != file_dir_real:
+        raise HTTPException(status_code=404, detail="not found")
     try:
         st = os.stat(full)
         if ttl_sec > 0 and (time.time() - float(st.st_mtime)) > float(ttl_sec):
