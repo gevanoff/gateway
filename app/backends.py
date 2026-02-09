@@ -73,6 +73,20 @@ def _backend_host(base_url: str) -> Optional[str]:
     return host
 
 
+def _sanitize_base_url(raw_base_url: str) -> str:
+    candidate = raw_base_url.strip()
+    if not candidate:
+        return ""
+    if any(ch in candidate for ch in ("\n", "\r", "\t")):
+        raise ValueError("Invalid base_url: contains control characters")
+    parsed = urlparse(candidate)
+    if parsed.scheme and parsed.scheme not in {"http", "https"}:
+        raise ValueError(f"Invalid base_url scheme: {parsed.scheme}")
+    if parsed.username or parsed.password:
+        raise ValueError("Invalid base_url: credentials are not allowed")
+    return candidate
+
+
 def _capability_availability(route_kind: RouteKind) -> Dict[str, Any]:
     registry = get_registry()
     available = []
@@ -254,7 +268,7 @@ def load_backends_config(path: Optional[Path] = None) -> BackendRegistry:
 
         backends[name] = BackendConfig(
             backend_class=cfg.get("class", name),
-            base_url=base_url,
+            base_url=_sanitize_base_url(base_url),
             description=cfg.get("description", ""),
             supported_capabilities=cfg.get("supported_capabilities", []),
             concurrency_limits=cfg.get("concurrency_limits", {}),
