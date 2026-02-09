@@ -140,7 +140,7 @@ backends:
     concurrency_limits:
       ocr: 2
     health:
-      liveness: /healthz
+      liveness: /health
       readiness: /readyz
     payload_policy: {}
 
