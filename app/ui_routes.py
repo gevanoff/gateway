@@ -12,7 +12,7 @@ import re
 import secrets
 import time
 from pathlib import Path
-from typing import Any, Dict, Literal, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 import httpx
 from app.httpx_client import httpx_client as _httpx_client
@@ -2490,11 +2490,14 @@ async def ui_chat_stream(req: Request):
                         import httpx
                         import json as _json
 
-                        base = os.environ.get("LIGHTON_OCR_API_BASE_URL", "http://127.0.0.1:9155").rstrip("/")
-                        timeout_sec = float(getattr(S, "LIGHTON_OCR_TIMEOUT_SEC", 120) or 120)
-                        timeout = httpx.Timeout(connect=10.0, read=timeout_sec, write=10.0, pool=10.0)
-                        async with httpx.AsyncClient(timeout=timeout) as client:
-                            resp = await client.post(f"{base}/v1/ocr", json={"image_url": image_url})
+                        base = (getattr(S, "LIGHTON_OCR_API_BASE_URL", "") or os.environ.get("LIGHTON_OCR_API_BASE_URL") or "").strip().rstrip("/")
+                        if not base:
+                            pre_events.append({"type": "delta", "delta": "[Scan] LightOnOCR is not configured (set LIGHTON_OCR_API_BASE_URL in the gateway env)."})
+                        else:
+                            timeout_sec = float(getattr(S, "LIGHTON_OCR_TIMEOUT_SEC", 120) or 120)
+                            timeout = httpx.Timeout(connect=10.0, read=timeout_sec, write=10.0, pool=10.0)
+                            async with httpx.AsyncClient(timeout=timeout) as client:
+                                resp = await client.post(f"{base}/v1/ocr", json={"image_url": image_url})
                             if resp.status_code >= 400:
                                 pre_events.append({"type": "delta", "delta": f"[Scan] failed: HTTP {resp.status_code}: {resp.text}"})
                             else:
@@ -2751,7 +2754,12 @@ async def ui_scan(req: Request) -> Dict[str, Any]:
         import httpx
         import os
 
-        base = os.environ.get("LIGHTON_OCR_API_BASE_URL", "http://127.0.0.1:9155").rstrip("/")
+        base = (getattr(S, "LIGHTON_OCR_API_BASE_URL", "") or os.environ.get("LIGHTON_OCR_API_BASE_URL") or "").strip().rstrip("/")
+        if not base:
+            raise HTTPException(
+                status_code=503,
+                detail="LightOnOCR is not configured. Set LIGHTON_OCR_API_BASE_URL in the gateway env (not just in UI).",
+            )
         timeout_sec = float(getattr(S, "LIGHTON_OCR_TIMEOUT_SEC", 120) or 120)
         timeout = httpx.Timeout(connect=10.0, read=timeout_sec, write=10.0, pool=10.0)
         async with httpx.AsyncClient(timeout=timeout) as client:
